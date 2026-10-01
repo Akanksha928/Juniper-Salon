@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Temporal assessment starter</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Temporal assessment starter</p>
+      <h1>Your environment is connected.</h1>
+      <p class="intro">
+        This neutral demonstration starts a Workflow, waits durably for a
+        Signal, and then completes. Replace it with the experience your
+        customer needs.
+      </p>
+      <section class="card">
+        <h2 id="phase">Ready</h2>
+        <p id="message">Start the demonstration to verify the setup.</p>
+        <button id="start">Start demo Workflow</button>
+        <button id="continue" hidden>Send continue Signal</button>
+        <p class="request-id" id="request-id"></p>
+      </section>
+      <p class="footer">
+        Inspect the execution at
+        <a href="http://localhost:8233" target="_blank">localhost:8233</a>.
+      </p>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
+

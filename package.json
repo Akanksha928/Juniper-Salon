@@ -1,0 +1,30 @@
+{
+  "name": "temporal-assessment-starter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Student starter for the Temporal post-assessment.",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "tsx src/api.ts",
+    "dev:worker": "tsx src/worker.ts",
+    "start:temporal": "docker compose up -d temporal",
+    "stop": "docker compose down",
+    "test": "tsx --test tests/workflow.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@temporalio/activity": "1.24.0",
+    "@temporalio/client": "1.24.0",
+    "@temporalio/worker": "1.24.0",
+    "@temporalio/workflow": "1.24.0",
+    "express": "5.2.1"
+  },
+  "devDependencies": {
+    "@temporalio/testing": "1.24.0",
+    "@types/express": "5.0.6",
+    "@types/node": "22.20.4",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
