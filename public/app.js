@@ -38,6 +38,9 @@ let matchesRequest = 0;
 // Openings whose "Cancel opening" was clicked and await "Are you sure?".
 const confirmingCancel = new Set();
 
+// Shown wherever a booking appears: the demo doesn't write to Square.
+const SIMULATED_BOOKING = "(simulated — Square not updated)";
+
 const PHASE_LABELS = {
   offering: "Offering",
   booking: "Booking",
@@ -189,6 +192,7 @@ function renderOpenings() {
       const state = openingState(s);
       const holder = s?.waitlist?.find((c) => c.clientId === s.currentClientId);
       const offer = s?.offers?.find((x) => x.clientId === s.currentClientId);
+      const summary = s ? offerSummary(s) : "";
       const offerLine = holder && offer?.expiresAt
         ? `<p class="opening-offer" data-name="${escapeHtml(holder.name)}" data-expires="${offer.expiresAt}"></p>`
         : "";
@@ -199,6 +203,7 @@ function renderOpenings() {
             <p class="opening-title">${escapeHtml(o.stylist)} · ${escapeHtml(o.service)}</p>
             <p class="opening-time">${escapeHtml(formatSlotTime(o.date, o.time))}</p>
             ${offerLine}
+            ${summary ? `<p class="opening-summary">${summary}</p>` : ""}
           </div>
           <span class="pill ${state.key}">${state.label}</span>
         </a>
@@ -207,6 +212,18 @@ function renderOpenings() {
     })
     .join(""));
   updateOfferTimers();
+}
+
+// "1 declined · 1 no reply · 2 left", where "left" is who hasn't been texted yet.
+function offerSummary(s) {
+  if (!s.waitlist.length) return s.phase === "offering" ? "" : "No matching clients";
+  const count = (state) => s.offers.filter((o) => o.state === state).length;
+  const left = s.waitlist.filter((c) => !s.offers.some((o) => o.clientId === c.clientId)).length;
+  const parts = [];
+  if (count("declined")) parts.push(`${count("declined")} declined`);
+  if (count("timed_out")) parts.push(`${count("timed_out")} no reply`);
+  if (s.phase === "offering") parts.push(`${left} left`);
+  return parts.join(" · ");
 }
 
 function updateOfferTimers() {
@@ -358,15 +375,19 @@ els.newSlot.addEventListener("click", () => {
 
 // ---------- Board ----------
 
+// Every matched client's status, in waitlist order: history first, then who
+// has the offer, then who's still up next.
 function clientState(client) {
   const offer = status.offers.find((o) => o.clientId === client.clientId);
   if (!offer) {
-    return status.phase === "offering" ? { key: "queued", label: "Queued" } : { key: "skipped", label: "Not needed" };
+    return status.phase === "offering" ? { key: "queued", label: "Up next" } : { key: "skipped", label: "Not needed" };
   }
   switch (offer.state) {
-    case "sending": return { key: "waiting", label: "Texting…" };
-    case "waiting": return { key: "waiting", label: "Waiting for reply" };
-    case "accepted": return { key: "accepted", label: status.phase === "booked" ? "Booked" : "Accepted" };
+    case "sending": return { key: "waiting", label: "Has the offer" };
+    case "waiting": return { key: "waiting", label: "Has the offer", expiresAt: offer.expiresAt };
+    case "accepted": return status.phase === "booked"
+      ? { key: "accepted", label: "Booked", simulated: true }
+      : { key: "accepted", label: "Accepted" };
     case "declined": return { key: "declined", label: "Declined" };
     case "timed_out": return { key: "timed_out", label: "No reply" };
     case "withdrawn": return { key: "skipped", label: "Offer withdrawn" };
@@ -396,7 +417,8 @@ function renderBanners() {
   if (status?.phase === "booked") {
     const booked = status.waitlist.find((c) => c.clientId === status.bookedClientId);
     banners.push(`<div class="banner success"><span class="banner-icon">✓</span><div>
-      <strong>Slot filled</strong>${escapeHtml(booked?.name ?? "A client")} is booked and has been sent a confirmation.</div></div>`);
+      <strong>Slot filled</strong>${escapeHtml(booked?.name ?? "A client")} is booked ${SIMULATED_BOOKING}
+      and has been sent a confirmation.</div></div>`);
   }
   els.banners.innerHTML = banners.join("");
 }
@@ -406,8 +428,11 @@ function renderBoard() {
   if (!status) return;
   const { slot } = status;
   els.slotTitle.textContent = `${slot.stylist} · ${slot.service}`;
-  els.slotMessage.textContent = `${formatSlotTime(slot.date, slot.time)} — ${status.message}`;
-  els.phasePill.textContent = PHASE_LABELS[status.phase];
+  const bookingNote = status.phase === "booking" || status.phase === "booked" ? ` ${SIMULATED_BOOKING}` : "";
+  els.slotMessage.textContent = `${formatSlotTime(slot.date, slot.time)} — ${status.message}${bookingNote}`;
+  els.phasePill.textContent = status.phase === "booked"
+    ? `${PHASE_LABELS.booked} ${SIMULATED_BOOKING}`
+    : PHASE_LABELS[status.phase];
   els.phasePill.className = `pill ${status.phase}`;
   setHtml(els.slotActions, slotActionsHtml(workflowId, status));
   els.workflowLink.textContent = workflowId;
@@ -438,7 +463,12 @@ function renderBoard() {
             <p class="client-name">${escapeHtml(client.name)}</p>
             <p class="client-phone">${escapeHtml(client.phone)}</p>
           </div>
-          <span class="pill ${state.key}">${state.label}</span>
+          <div class="client-status">
+            <span class="pill ${state.key}">${state.label}${
+              state.expiresAt ? ` · <span class="pill-time" data-expires="${state.expiresAt}"></span> left` : ""
+            }</span>
+            ${state.simulated ? `<small class="sim-note">${SIMULATED_BOOKING}</small>` : ""}
+          </div>
         </div>
         ${countdown}
         ${actions}
@@ -452,7 +482,10 @@ function renderBoard() {
   }
 
   els.timeline.innerHTML = status.events
-    .map((e) => `<li class="${e.kind}"><time>${formatClock(e.at)}</time>${escapeHtml(e.text)}</li>`)
+    .map((e) => {
+      const note = e.kind === "accepted" || e.kind === "booked" ? ` ${SIMULATED_BOOKING}` : "";
+      return `<li class="${e.kind}"><time>${formatClock(e.at)}</time>${escapeHtml(e.text)}${note}</li>`;
+    })
     .join("");
   updateCountdowns();
 }
@@ -466,12 +499,14 @@ function renderOutbox(outbox) {
   els.outbox.innerHTML = outbox.messages
     .map((m) => `<li class="sms ${m.kind}">
       <div class="sms-to"><span>To ${escapeHtml(m.toName)}</span><span>${formatClock(m.sentAt)}</span></div>
-      ${escapeHtml(m.body)}</li>`)
+      ${escapeHtml(m.body)}
+      ${m.kind === "confirmation" ? `<small class="sim-note">${SIMULATED_BOOKING}</small>` : ""}</li>`)
     .join("");
 }
 
 function updateCountdowns() {
   if (!status) return;
+  for (const el of document.querySelectorAll(".pill-time")) el.textContent = formatRemaining(el.dataset.expires);
   for (const el of document.querySelectorAll(".countdown")) {
     const remainingMs = Math.max(0, new Date(el.dataset.expires).getTime() - Date.now());
     const fraction = remainingMs / status.responseTimeoutMs;
