@@ -50,8 +50,22 @@ npm run typecheck # Check TypeScript
 npm run stop      # Stop the local Temporal service
 ```
 
+## Demo waitlist
+
+The waitlist lives in [`data/waitlist.csv`](data/waitlist.csv), one row per client. In production this would be the salon's Google Sheet. Open it in Excel, Google Sheets, or a text editor. The app re-reads it on every cancellation, so edits apply to the next one without a restart. The page's **Waitlist** section shows what's in the file.
+
+| Column | Example | Notes |
+| --- | --- | --- |
+| `name` | Priya Shah | |
+| `phone` | (555) 010-2231 | Demo numbers only |
+| `service` | Cut & style | Must match a service in the form exactly |
+| `availability` | `Mon-Fri 09:00-17:00` | Days as a range (`Mon-Fri`) or list (`Tue,Thu`), then a 24-hour time range. Separate several windows with `;`, e.g. `Sat,Sun 10:00-18:00; Mon 17:00-21:00` |
+| `preferred_stylist` | Maya | Leave blank for any stylist |
+| `joined` | 2026-08-14 | Earliest joiners are texted first. `8/14/2026` also works |
+
 ## Repository map
 
+- `data/waitlist.csv` — demo waitlist (see above)
 - `src/workflows.ts` — durable Workflow logic and message handlers
 - `src/worker.ts` — Worker and Task Queue configuration
 - `src/api.ts` — browser-facing API and Temporal Client

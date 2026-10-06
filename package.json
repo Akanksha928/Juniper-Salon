@@ -9,7 +9,7 @@
     "dev:worker": "tsx src/worker.ts",
     "start:temporal": "docker compose up -d temporal",
     "stop": "docker compose down",
-    "test": "tsx --test tests/workflow.test.ts",
+    "test": "tsx --test tests/waitlist.test.ts tests/matching.test.ts tests/workflow.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": { "node": ">=20" },

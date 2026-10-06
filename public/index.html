@@ -3,31 +3,121 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Temporal assessment starter</title>
+    <title>Juniper Salon Waitlist</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">J</span>
+        <div>
+          <p class="brand-name">Juniper Salon</p>
+          <p class="brand-sub">Same-day waitlist</p>
+        </div>
+      </div>
+      <a class="temporal-link" href="http://localhost:8233" target="_blank" rel="noopener">Temporal UI ↗</a>
+    </header>
+
     <main>
-      <p class="eyebrow">Temporal assessment starter</p>
-      <h1>Your environment is connected.</h1>
-      <p class="intro">
-        This neutral demonstration starts a Workflow, waits durably for a
-        Signal, and then completes. Replace it with the experience your
-        customer needs.
-      </p>
-      <section class="card">
-        <h2 id="phase">Ready</h2>
-        <p id="message">Start the demonstration to verify the setup.</p>
-        <button id="start">Start demo Workflow</button>
-        <button id="continue" hidden>Send continue Signal</button>
-        <p class="request-id" id="request-id"></p>
+      <div id="banners"></div>
+
+      <div id="home">
+      <!-- Openings that need filling -->
+      <section id="openings" class="card openings-card">
+        <p class="section-label">Openings</p>
+        <ul id="openings-list" class="openings"></ul>
       </section>
-      <p class="footer">
-        Inspect the execution at
-        <a href="http://localhost:8233" target="_blank">localhost:8233</a>.
-      </p>
+
+      <!-- Demo: open a slot -->
+      <div class="demo-toggles">
+        <button type="button" id="toggle-setup" class="secondary demo-toggle" aria-expanded="false" aria-controls="setup">Simulate a cancellation (demo)</button>
+        <button type="button" id="toggle-waitlist" class="secondary demo-toggle" aria-expanded="false" aria-controls="waitlist">Waitlist (demo data — in production this is the salon's Google Sheet)</button>
+      </div>
+      <section id="setup" class="card demo-card" hidden>
+        <p class="demo-label">In production, cancellations come from Square.</p>
+        <form id="slot-form">
+          <div class="fields">
+            <label>Stylist
+              <select name="stylist">
+                <option>Maya</option>
+                <option>Jordan</option>
+                <option>Lena</option>
+              </select>
+            </label>
+            <label>Service
+              <select name="service">
+                <option>Cut &amp; style</option>
+                <option>Color refresh</option>
+                <option>Blowout</option>
+              </select>
+            </label>
+            <label>Date <input type="date" name="date" required /></label>
+            <label>Time <input type="time" name="time" step="900" required /></label>
+          </div>
+          <div class="roster">
+            <p class="section-label">Who matches, in the order they'll be texted</p>
+            <ol id="roster-list"></ol>
+            <p id="roster-empty" class="roster-empty" hidden></p>
+          </div>
+          <p id="form-error" class="form-error" hidden></p>
+          <button type="submit" class="primary" id="open-slot">Simulate cancellation</button>
+        </form>
+      </section>
+
+      <!-- Demo: the whole waitlist -->
+      <section id="waitlist" class="card demo-card" hidden>
+        <p class="demo-label">Read from <code>data/waitlist.csv</code>. Edit that file to change the waitlist; the next cancellation uses your changes.</p>
+        <div class="table-wrap">
+          <table class="waitlist-table">
+            <thead>
+              <tr><th>Client</th><th>Service</th><th>Available</th><th>Stylist</th><th>Joined</th></tr>
+            </thead>
+            <tbody id="waitlist-rows"></tbody>
+          </table>
+        </div>
+      </section>
+      </div>
+
+      <!-- Step 2: watch it run -->
+      <section id="board" hidden>
+        <a href="#" class="back-link">← Back to home</a>
+        <div class="card slot-header">
+          <div>
+            <p class="section-label">Open slot</p>
+            <h2 id="slot-title"></h2>
+            <p id="slot-message" class="slot-message"></p>
+          </div>
+          <div class="slot-meta">
+            <span id="phase-pill" class="pill"></span>
+            <div id="slot-actions" class="slot-actions"></div>
+            <a id="workflow-link" class="workflow-id" target="_blank" rel="noopener"></a>
+          </div>
+        </div>
+
+        <div class="grid">
+          <section class="card">
+            <p class="section-label">Waitlist</p>
+            <p class="hint">Each phone below is a simulated client. Try replying out of turn or after time runs out.</p>
+            <ul id="clients" class="clients"></ul>
+          </section>
+
+          <div class="stack">
+            <section class="card">
+              <p class="section-label">Timeline</p>
+              <ol id="timeline" class="timeline"></ol>
+            </section>
+            <section class="card">
+              <p class="section-label">Texts sent <span id="outbox-note" class="muted"></span></p>
+              <ul id="outbox" class="outbox"></ul>
+            </section>
+          </div>
+        </div>
+
+        <button id="new-slot" class="secondary">Open another slot</button>
+      </section>
     </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
     <script src="/app.js"></script>
   </body>
 </html>
-
