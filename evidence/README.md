@@ -64,3 +64,27 @@ This is the slot behind the "Filled" notice in 01, run through to the end.
 | 49 | 7:31:49 PM | **Workflow Execution Completed.** The final status is on the right. |
 
 The dismissal was done about 25 minutes later, on a later Worker process (`8260@Ak-Laptop`), when this screenshot was added.
+
+## Late replies, out-of-turn replies, and a restart mid-offer
+
+Taken later the same evening with the same setup (60-second reply window, 1440px window).
+
+| File | Slot | What it shows |
+| --- | --- | --- |
+| [`late-reply.png`](late-reply.png) | Maya · Cut & style, Wed Oct 28, 4:00 PM (Priya, Daniel, Grace) | **A late YES is turned away.** Priya's 60 seconds ran out, so Daniel got the offer. Priya then replied YES. The API rejected it (409: "this offer isn't open for you right now"), so it never reached the Workflow. The page shows Priya *No reply* and Daniel *Has the offer*. The last text is Priya's "Sorry, the 4:00 PM Cut & style … has been offered to someone else." |
+| [`out-of-turn.png`](out-of-turn.png) | Same slot, two seconds later | **An out-of-turn YES is turned away.** While Daniel still held the offer, Grace (next in line) replied YES. It was rejected the same way. Daniel still *Has the offer*, Grace is still *Up next*, and Grace has her own "Sorry…" text. Neither rejected reply could double-book the slot. |
+| [`restart.png`](restart.png) | Maya · Cut & style, Mon Oct 26, 1:00 PM (Priya, Daniel) | **Restart mid-offer, Temporal UI event history, oldest first** (walkthrough below). |
+
+### Reading restart.png
+
+The Worker was killed at 7:44:38 PM, about a second after Priya's offer went out. It was restarted 75 seconds later, at 7:45:53 PM.
+
+| Event | Time | What happened |
+| --- | --- | --- |
+| 11–13 | 7:44:37 PM | `sendOffer` texts Priya, on the original Worker `27064@Ak-Laptop`. |
+| 17 | 7:44:37 PM | Priya's 1-minute reply timer starts. |
+| 18 | 7:45:37 PM | **Timer Fired**, while no Worker was running. Temporal fires timers on its own server, on schedule, so the reply window ended on time even during the outage. |
+| 19–21 | 7:45:37–7:45:47 PM | The task waits for the dead Worker, times out (red row), and goes back on the shared `juniper-waitlist` queue. |
+| 22–23 | 7:45:56 PM | **The restarted Worker (`13036@Ak-Laptop`) picks it up**, three seconds after starting. It sees the timer has fired and records Priya's timeout. |
+| 24–26 | 7:45:56 PM | **`sendOffer` texts the next client, Daniel.** |
+| 30 | 7:45:56 PM | Daniel's 1-minute timer starts. |
