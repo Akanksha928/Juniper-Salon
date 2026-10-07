@@ -75,11 +75,13 @@ test("no matches returns an empty list", () => {
 });
 
 test("findMatchingClients matches different people for different slots", async () => {
-  const slot = (overrides: Partial<Slot>): Slot => ({ slotId: "s", ...MONDAY_2PM, ...overrides });
+  // Uses the shipped waitlist, in which nobody is available Sundays or Mondays.
+  // 2026-10-09 is a Friday and 2026-10-06 a Tuesday.
+  const slot = (overrides: Partial<Slot>): Slot => ({ slotId: "s", ...MONDAY_2PM, date: "2026-10-09", ...overrides });
   const names = async (s: Slot) => (await findMatchingClients(s)).map((c) => c.name);
 
   assert.deepEqual(await names(slot({ time: "17:00" })), ["Daniel Kim", "Grace Liu"]);
-  assert.deepEqual(await names(slot({ stylist: "Jordan", time: "17:00" })), ["Mei Chen", "Grace Liu"]);
+  assert.deepEqual(await names(slot({ stylist: "Jordan", date: "2026-10-06", time: "17:00" })), ["Mei Chen", "Grace Liu"]);
   assert.deepEqual(await names(slot({ stylist: "Lena", service: "Blowout", time: "09:00" })), ["Sam Okafor"]);
   assert.deepEqual(await names(slot({ stylist: "Lena", service: "Color refresh", time: "10:00" })), []);
   // Only the fields the Workflow needs leave the Activity.

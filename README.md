@@ -21,6 +21,8 @@ Replies that come late or out of turn are turned away and the client gets a "sor
 
 Booked and front-desk slots close automatically at the end of the slot's day if nobody dismisses or handles them, so old openings don't pile up.
 
+Clients are only texted during opening hours, Tuesday–Saturday 9 AM–7 PM by default (see [Texting hours](#texting-hours)).
+
 If a step keeps failing, the Workflow stops retrying after 5 tries (about 15 seconds), shows the error on the slot's page and timeline, and carries on as best it can. Examples: the waitlist file can't be read, a text can't be sent, or the booking fails.
 
 | What failed | What happens next |
@@ -81,9 +83,39 @@ npm test          # Workflow, matching and CSV tests (no Docker needed)
 npm run typecheck # Check TypeScript
 ```
 
+### Demoing outside opening hours
+
+Outside opening hours (evenings, Sundays and Mondays by default), a new slot just shows "Waiting until Tue 9:00 AM to start texting". To demo the full flow at any time, turn on the override.
+
+In PowerShell:
+
+```powershell
+$env:IGNORE_QUIET_HOURS = "true"; npm run dev
+```
+
+In Git Bash or macOS/Linux:
+
+```bash
+IGNORE_QUIET_HOURS=true npm run dev
+```
+
+Slots still have to be in opening hours; only the texting restriction is lifted. Start the app again without the variable to switch it off.
+
 ### Reply window: 30 seconds in the demo, 15 minutes by default
 
 Each client has a set time to reply before the offer moves on. The Workflow's default is **15 minutes**, the real-world setting. `npm run dev` passes **30 seconds** instead, so you can watch offers time out without waiting. Change it with `RESPONSE_TIMEOUT_SECONDS`.
+
+## Texting hours
+
+Lena's rule: **client texts only go out Tuesday–Saturday, 9 AM–7 PM, salon time.** Front desk messages aren't restricted.
+
+- **Offers wait for opening time.** Before each offer, the Workflow checks the time. Outside hours it waits on a durable Temporal timer until the next opening time, then texts. The wait survives Worker restarts, and the front desk can still cancel the opening meanwhile. The openings card and the slot's page show "Waiting until Tue 9:00 AM to start texting" (or "to resume texting", if it ran out of time mid-list).
+- **An offer must fit before closing.** An offer only goes out if its whole reply window ends by 7 PM. With a 15-minute window, the last offer of the day goes out at 6:45 PM. So confirmations, which follow a YES within the window, never go out after 7 either.
+- **Too late means the front desk.** If texting couldn't resume until after the slot starts (say, a Saturday 6:55 PM slot cancelled at 6:50 PM), the slot goes straight to the front desk with that reason instead of waiting.
+- **Sorry texts are skipped after hours.** A late or out-of-turn reply outside opening hours is still turned away, but the client isn't texted.
+- **Slots must be in opening hours.** The cancellation form only allows them, and the API rejects others.
+
+The hours are a setting (`SALON_HOURS`, below). Each slot keeps the hours it was opened with.
 
 ## Settings
 
@@ -96,8 +128,11 @@ All optional, set as environment variables.
 | `PORT` | `3000` | Port for the web app and API. |
 | `OUTBOX_PORT` | `3001` | Port where the Worker serves the simulated text outbox to the API (local only). |
 | `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal server address. |
+| `SALON_HOURS` | `Tue-Sat 09:00-19:00` | Opening hours: when slots can be and when clients can be texted. Same format as the waitlist's availability column, one window only. |
+| `SALON_TIME_ZONE` | This machine's time zone | The salon's [IANA time zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `America/Los_Angeles`. Used for opening hours and the end of a slot's day. |
+| `IGNORE_QUIET_HOURS` | off | Set to `true` to text clients at any time, for demos ([above](#demoing-outside-opening-hours)). |
 
-"Today" in texts and the end of a slot's day use the local time zone of the machine running the app, which is taken to be the salon's.
+"Today" in texts uses the time zone of the machine running the Worker, so run it in the salon's time zone (or keep `SALON_TIME_ZONE` at its default).
 
 ## Waitlist CSV format
 
@@ -108,7 +143,7 @@ All optional, set as environment variables.
 | `name` | Priya Shah | Required |
 | `phone` | (555) 010-2231 | Required. Demo numbers only. |
 | `service` | Cut & style | Required. Must match a service in the form exactly: `Cut & style`, `Color refresh` or `Blowout`. |
-| `availability` | `Mon-Fri 09:00-17:00` | Required. Days as a range (`Mon-Fri`, which can wrap, like `Sat-Mon`) or a list (`Tue,Thu`), then a 24-hour time range. The start time is included and the end time isn't. Separate several windows with `;`, e.g. `Sat,Sun 10:00-18:00; Mon 17:00-21:00`. Quote the cell if it contains a comma. |
+| `availability` | `Tue-Fri 09:00-17:00` | Required. Days as a range (`Tue-Fri`, which can wrap, like `Fri-Tue`) or a list (`Tue,Thu`), then a 24-hour time range. The start time is included and the end time isn't. Separate several windows with `;`, e.g. `Sat 10:00-18:00; Tue 17:00-21:00`. Quote the cell if it contains a comma. The salon is closed Sundays and Mondays, so the sample data leaves them out. |
 | `preferred_stylist` | Maya | Optional. Leave blank for any stylist. Otherwise `Maya`, `Jordan` or `Lena`. |
 | `joined` | 2026-08-14 | Required. Earliest joiners are texted first (ties go alphabetically). `8/14/2026`, as Excel saves it, also works. |
 
@@ -124,12 +159,12 @@ If a row can't be read, the error names the row number and the problem. For exam
 - `src/matching.ts`: who matches a slot, and in what order
 - `src/waitlist.ts`: reads and checks `data/waitlist.csv`
 - `src/outbox.ts`: the simulated SMS gateway (in-memory outbox)
-- `src/shared.ts`: helpers shared by the Workflow, Activities and API (formatting, task queue name, defaults)
+- `src/shared.ts`: helpers shared by the Workflow, Activities and API (formatting, opening-hours and time zone maths, task queue name, defaults)
 - `src/types.ts`: shared data types
 - `public/`: the web page (front desk view and demo controls)
 - `data/waitlist.csv`: the demo waitlist
 - `scripts/dev.mjs`: `npm run dev`. It starts Temporal, the Worker and the API together.
-- `tests/`: tests for the Workflow (including a replay test that catches non-deterministic Workflow changes), matching, and the CSV reader
+- `tests/`: tests for the Workflow (including texting hours, and a replay test that catches non-deterministic Workflow changes), opening-hours time maths, matching, and the CSV reader
 - `compose.yml`: the local Temporal server
 - `evidence/`: screenshot of a Workflow in the Temporal Web UI
 

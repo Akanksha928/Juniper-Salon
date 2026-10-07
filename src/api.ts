@@ -10,9 +10,18 @@ import {
 import express, { type NextFunction, type Request, type Response } from "express";
 import { cancelOpening, dismissFilledNotice, getWaitlistStatus, markHandled, replyToOffer } from "./messages";
 import { matchClients } from "./matching";
-import { endOfDay, localDate, rejectionNotice, TASK_QUEUE } from "./shared";
-import type { Slot, StaffActionResult, WaitlistInput, WaitlistStatus } from "./types";
-import { loadWaitlist } from "./waitlist";
+import {
+  describeHours,
+  endOfDay,
+  isTextingTime,
+  isWithinHours,
+  localDate,
+  rejectionNotice,
+  salonTimeToMs,
+  TASK_QUEUE,
+} from "./shared";
+import type { Slot, StaffActionResult, TextingHours, WaitlistInput, WaitlistStatus } from "./types";
+import { loadWaitlist, parseAvailability } from "./waitlist";
 import type { waitlistWorkflow } from "./workflows";
 
 // Demo default is 30 seconds; the Workflow's own default is 15 minutes.
@@ -20,6 +29,22 @@ const RESPONSE_TIMEOUT_SECONDS = Number(process.env.RESPONSE_TIMEOUT_SECONDS ?? 
 const OUTBOX_URL = `http://127.0.0.1:${process.env.OUTBOX_PORT ?? 3001}/outbox`;
 // Keep requests short when no Worker is running, so the UI can say so.
 const WORKER_DEADLINE_MS = 3000;
+
+// The salon's opening hours, in the same format as the waitlist's
+// availability column. Slots must fall within them, and client texts only go
+// out within them. Fails at startup if either setting is invalid.
+const SALON_TIME_ZONE = process.env.SALON_TIME_ZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+const OPENING_HOURS: TextingHours = { ...parseOpeningHours(process.env.SALON_HOURS ?? "Tue-Sat 09:00-19:00"), timeZone: SALON_TIME_ZONE };
+// Demo override: text clients at any time. Slots still have to be in opening hours.
+const IGNORE_QUIET_HOURS = process.env.IGNORE_QUIET_HOURS === "true";
+const TEXTING_HOURS = IGNORE_QUIET_HOURS ? undefined : OPENING_HOURS;
+
+function parseOpeningHours(text: string) {
+  const windows = parseAvailability(text);
+  if (windows.length !== 1) throw new Error(`SALON_HOURS must be one window, like "Tue-Sat 09:00-19:00"`);
+  new Intl.DateTimeFormat("en-US", { timeZone: SALON_TIME_ZONE }); // throws if the time zone is unknown
+  return windows[0];
+}
 
 const app = express();
 app.use(express.json());
@@ -148,6 +173,11 @@ app.get("/api/waitlist", async (_request, response) => {
   }
 });
 
+// What the page needs to restrict the cancellation form to opening hours.
+app.get("/api/config", (_request, response) => {
+  response.json({ openingHours: OPENING_HOURS, hoursText: describeHours(OPENING_HOURS) });
+});
+
 app.post("/api/slots", async (request, response) => {
   const body = request.body ?? {};
   if (!isSlot(body)) {
@@ -155,6 +185,10 @@ app.post("/api/slots", async (request, response) => {
     return;
   }
   const { stylist, service, date, time } = body as Record<string, string>;
+  if (!isWithinHours(date, time, OPENING_HOURS)) {
+    response.status(400).json({ error: `That's outside opening hours (${describeHours(OPENING_HOURS)}).` });
+    return;
+  }
 
   // The Workflow ID is derived from the slot, so Temporal itself refuses to
   // run a second waitlist for the same opening.
@@ -163,7 +197,9 @@ app.post("/api/slots", async (request, response) => {
   const input: WaitlistInput = {
     slot: { slotId, stylist: stylist.trim(), service: service.trim(), date, time },
     responseTimeoutMs: RESPONSE_TIMEOUT_SECONDS * 1000,
-    closesAt: endOfDay(date),
+    startsAt: new Date(salonTimeToMs(date, time, SALON_TIME_ZONE)).toISOString(),
+    closesAt: endOfDay(date, SALON_TIME_ZONE),
+    textingHours: TEXTING_HOURS,
   };
 
   const client = await clientOrUnavailable(response);
@@ -250,8 +286,10 @@ app.get("/api/slots/:workflowId", async (request, response) => {
 
 // Rejected replies never reach the Workflow, so the API texts the client
 // itself through the Worker's simulated SMS gateway. Best effort: the reply
-// stays rejected even if the text can't be sent.
+// stays rejected even if the text can't be sent. Outside texting hours no
+// text goes out at all.
 async function textRejectedClient(workflowId: string, clientId: string): Promise<void> {
+  if (TEXTING_HOURS && !isTextingTime(Date.now(), TEXTING_HOURS)) return;
   try {
     const client = await getClient();
     const status = await client.withDeadline(Date.now() + WORKER_DEADLINE_MS, () =>
@@ -368,6 +406,7 @@ const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () =>
   console.log(
     `Juniper Salon waitlist is available at http://localhost:${port} ` +
-      `(reply window: ${RESPONSE_TIMEOUT_SECONDS}s)`,
+      `(reply window: ${RESPONSE_TIMEOUT_SECONDS}s; open ${describeHours(OPENING_HOURS)}, ${SALON_TIME_ZONE}; ` +
+      `${IGNORE_QUIET_HOURS ? "texting at any time (IGNORE_QUIET_HOURS)" : "texting in opening hours only"})`,
   ),
 );

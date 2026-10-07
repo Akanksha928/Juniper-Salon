@@ -14,9 +14,11 @@ test("the shipped waitlist file loads", async () => {
   const mei = entries.find((e) => e.name === "Mei Chen")!;
   assert.equal(mei.preferredStylist, "Jordan");
   assert.deepEqual(mei.availability, [
-    { days: ["Sun", "Sat"], from: "10:00", to: "18:00" },
-    { days: ["Mon"], from: "17:00", to: "21:00" },
+    { days: ["Sat"], from: "10:00", to: "18:00" },
+    { days: ["Tue"], from: "17:00", to: "21:00" },
   ]);
+  // The salon is closed Sundays and Mondays, so nobody lists them.
+  assert.ok(entries.every((e) => e.availability.every((w) => !w.days.includes("Sun") && !w.days.includes("Mon"))));
   assert.equal(entries.find((e) => e.name === "Priya Shah")!.preferredStylist, undefined);
 });
 

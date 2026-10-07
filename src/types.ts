@@ -21,6 +21,13 @@ export type Availability = {
   to: string; // HH:MM, 24-hour
 };
 
+// The salon's opening hours, e.g. Tue–Sat 09:00–19:00, in its IANA time zone
+// (e.g. "America/Los_Angeles"). Slots must fall within them, and client texts
+// only go out within them.
+export type TextingHours = Availability & {
+  timeZone: string;
+};
+
 // One row of the salon's waitlist (a Google Sheet in production).
 export type WaitlistEntry = WaitlistClient & {
   service: string;
@@ -33,10 +40,12 @@ export type WaitlistEntry = WaitlistClient & {
 export type WaitlistInput = {
   slot: Slot;
   responseTimeoutMs?: number;
-  // When the slot's day ends (ISO 8601). Booked and front-desk slots close
-  // themselves then. Worked out by the caller, because the Workflow can't
-  // rely on the Worker's time zone.
+  // When the slot starts and when its day ends (ISO 8601), in the salon's
+  // time zone. Booked and front-desk slots close themselves at closesAt.
+  startsAt: string;
   closesAt: string;
+  // When client texts may go out. Absent means any time (the demo override).
+  textingHours?: TextingHours;
 };
 
 // "withdrawn": the opening was cancelled while this client held the offer.
@@ -66,7 +75,8 @@ export type TimelineEvent = {
     | "handled"
     | "dismissed"
     | "error"
-    | "closed";
+    | "closed"
+    | "waiting";
   text: string;
 };
 
@@ -91,6 +101,11 @@ export type WaitlistStatus = {
   // The latest step that still failed after its retries ran out, e.g. the
   // waitlist file couldn't be read. Shown on the slot's page.
   error?: string;
+  // Set while the Workflow waits for texting hours before the next offer.
+  waitingUntil?: string;
+  // Why the slot went to the front desk, when it isn't simply that nobody
+  // took it (e.g. texting hours don't resume until after the slot starts).
+  frontDeskReason?: string;
   offers: OfferRecord[];
   events: TimelineEvent[];
   message: string;

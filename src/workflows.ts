@@ -1,7 +1,7 @@
 import { ActivityFailure, condition, proxyActivities, setHandler } from "@temporalio/workflow";
 import type * as activities from "./activities";
 import { cancelOpening, dismissFilledNotice, getWaitlistStatus, markHandled, replyToOffer } from "./messages";
-import { DEFAULT_RESPONSE_TIMEOUT_MS, formatTime } from "./shared";
+import { DEFAULT_RESPONSE_TIMEOUT_MS, describeSalonTime, formatTime, nextTextingTime } from "./shared";
 import type {
   OfferRecord,
   ReplyInput,
@@ -76,6 +76,27 @@ export async function waitlistWorkflow(input: WaitlistInput): Promise<WaitlistSt
       recordFailure(what, error);
       return false;
     }
+  };
+
+  // Lena's rule: client texts only go out in opening hours, and an offer only
+  // if its whole reply window ends by closing. Waits on a durable timer until
+  // then (the front desk can still cancel meanwhile). If texting can't resume
+  // until after the slot starts, the slot goes to the front desk instead.
+  const waitForTextingTime = async (): Promise<"ok" | "cancelled" | { tooLate: string }> => {
+    const hours = input.textingHours;
+    if (!hours) return "ok";
+    const now = Date.now();
+    const sendAt = nextTextingTime(now, responseTimeoutMs, hours);
+    if (sendAt <= now) return "ok";
+    const when = describeSalonTime(sendAt, hours.timeZone);
+    if (sendAt >= Date.parse(input.startsAt)) {
+      return { tooLate: `Texting hours don't resume until ${when}, after the slot starts` };
+    }
+    status.waitingUntil = new Date(sendAt).toISOString();
+    addEvent("waiting", `Waiting until ${when} to ${status.offers.length ? "resume" : "start"} texting.`);
+    await condition(() => cancelRequested, sendAt - now);
+    status.waitingUntil = undefined;
+    return cancelRequested ? "cancelled" : "ok";
   };
 
   // Booked and front-desk slots wait for the front desk, but no later than
@@ -224,6 +245,13 @@ export async function waitlistWorkflow(input: WaitlistInput): Promise<WaitlistSt
 
   for (const client of waitlist) {
     if (cancelRequested) return cancel();
+    const ready = await waitForTextingTime();
+    if (ready === "cancelled") return cancel();
+    if (ready !== "ok") {
+      problem = ready.tooLate;
+      addEvent("staff", `${problem}.`);
+      break;
+    }
     const offer: OfferRecord = { clientId: client.clientId, name: client.name, state: "sending" };
     status.offers.push(offer);
     status.message = `Texting ${client.name}…`;
@@ -292,6 +320,7 @@ export async function waitlistWorkflow(input: WaitlistInput): Promise<WaitlistSt
 
   if (cancelRequested) return cancel();
   status.phase = "unfilled";
+  if (problem) status.frontDeskReason = problem;
   addEvent(
     "staff",
     problem

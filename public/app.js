@@ -26,6 +26,7 @@ const els = {
   outboxNote: $("#outbox-note"),
   newSlot: $("#new-slot"),
   toast: $("#toast"),
+  hoursHint: $("#hours-hint"),
 };
 
 let workflowId;
@@ -39,6 +40,10 @@ let polling = false;
 let toastTimer;
 let openingsTimer;
 let matchesRequest = 0;
+// Opening hours from the API: { openingHours: { days, from, to, timeZone }, hoursText }.
+// Slots must fall within them, and clients are only texted within them.
+let config;
+
 // Openings whose "Cancel opening" was clicked and await "Are you sure?".
 const confirmingCancel = new Set();
 
@@ -182,6 +187,7 @@ let refreshingOpenings = false;
 function openingState(s) {
   if (!s) return { key: "queued", label: "Paused" }; // listed, but no Worker to give live status
   if (s.phase === "unfilled") return { key: "unfilled", label: "Needs front desk" };
+  if (s.waitingUntil) return { key: "queued", label: "Waiting for opening hours" };
   return { key: "offering", label: "Texting a client" };
 }
 
@@ -227,7 +233,9 @@ function renderOpenings() {
       const summary = s ? offerSummary(s) : "";
       const offerLine = holder && offer?.expiresAt
         ? `<p class="opening-offer" data-name="${escapeHtml(holder.name)}" data-expires="${offer.expiresAt}"></p>`
-        : "";
+        : s?.waitingUntil
+          ? `<p class="opening-waiting">${escapeHtml(s.message)}</p>`
+          : "";
       const actions = slotActionsHtml(id, s);
       return `<li class="opening">
         <a class="opening-link" href="#${encodeURIComponent(id)}">
@@ -339,12 +347,42 @@ els.toggleWaitlist.addEventListener("click", async () => {
   }
 });
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// Why a slot can't be opened, or "" if it can. Matches the API's check.
+function slotHoursProblem(date, time) {
+  if (!config || !date || !time) return "";
+  const { days, from, to } = config.openingHours;
+  const weekday = WEEKDAYS[new Date(`${date}T00:00:00Z`).getUTCDay()];
+  if (days.includes(weekday) && from <= time && time < to) return "";
+  return `That's outside opening hours (${config.hoursText}).`;
+}
+
+function checkSlotHours() {
+  const problem = slotHoursProblem(els.form.date.value, els.form.time.value);
+  els.formError.textContent = problem;
+  els.formError.hidden = !problem;
+  els.openSlot.disabled = Boolean(problem);
+}
+
+// Starts the form at the next 15-minute slot in opening hours (in this
+// browser's time zone, taken to be the salon's).
 function initForm() {
-  const now = new Date();
-  now.setMinutes(Math.ceil((now.getMinutes() + 1) / 15) * 15, 0, 0);
   const pad = (n) => String(n).padStart(2, "0");
-  els.form.date.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  els.form.time.value = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const at = new Date();
+  at.setMinutes(Math.ceil((at.getMinutes() + 1) / 15) * 15, 0, 0);
+  const slotOf = (d) => [`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, `${pad(d.getHours())}:${pad(d.getMinutes())}`];
+  for (let step = 0; step < 8 * 24 * 4 && slotHoursProblem(...slotOf(at)); step++) at.setMinutes(at.getMinutes() + 15);
+  [els.form.date.value, els.form.time.value] = slotOf(at);
+  if (config) {
+    const { from, to } = config.openingHours;
+    const [h, m] = to.split(":").map(Number);
+    els.form.time.min = from;
+    els.form.time.max = `${pad(Math.floor((h * 60 + m - 15) / 60))}:${pad((h * 60 + m - 15) % 60)}`;
+    els.hoursHint.textContent = `Juniper is open ${config.hoursText}. Slots must be in opening hours.`;
+    els.hoursHint.hidden = false;
+  }
+  checkSlotHours();
   refreshMatches();
 }
 
@@ -374,11 +412,15 @@ async function refreshMatches() {
     : "Could not load matching clients.";
 }
 
-els.form.addEventListener("input", refreshMatches);
+els.form.addEventListener("input", () => {
+  checkSlotHours();
+  refreshMatches();
+});
 
 els.form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  els.formError.hidden = true;
+  checkSlotHours();
+  if (els.openSlot.disabled) return;
   els.openSlot.disabled = true;
   const form = new FormData(els.form);
   const slot = {
@@ -456,6 +498,12 @@ function renderBanners() {
       <strong>Closed at the end of the day</strong>The slot's day is over, so it was closed automatically and taken
       off the openings list.</div></div>`);
   }
+  if (status?.waitingUntil) {
+    const hours = config ? ` (${escapeHtml(config.hoursText)})` : "";
+    banners.push(`<div class="banner offline"><span class="banner-icon">◷</span><div>
+      <strong>Waiting for opening hours</strong>${escapeHtml(status.message)} Clients are only texted during opening
+      hours${hours}.</div></div>`);
+  }
   if (workerOffline) {
     banners.push(`<div class="banner offline"><span class="banner-icon">⏸</span><div>
       <strong>The waitlist is paused for a moment</strong>Texts and replies are on hold. Nothing is lost: it
@@ -472,7 +520,9 @@ function renderBanners() {
       ${escapeHtml(status.slot.service)}`;
     const why = status.error
       ? `The waitlist couldn't finish filling ${slotName} on its own (see above).`
-      : `Nobody on the waitlist ${status.waitlist.length ? "took" : "matches"} ${slotName}.`;
+      : status.frontDeskReason
+        ? `${escapeHtml(status.frontDeskReason)}, so nobody was texted for ${slotName}.`
+        : `Nobody on the waitlist ${status.waitlist.length ? "took" : "matches"} ${slotName}.`;
     banners.push(`<div class="banner staff"><span class="banner-icon">⚠</span><div>
       <strong>Front desk: this slot needs you</strong>${why}
       ${status.staffNotified ? "Staff have been alerted." : "Alerting staff…"}</div></div>`);
@@ -673,7 +723,15 @@ function route() {
   poll();
 }
 
+async function loadConfig() {
+  try {
+    const response = await fetch("/api/config");
+    if (response.ok) config = await response.json();
+  } catch {} // the API still checks slots; the form just can't warn early
+}
+
 async function init() {
+  await loadConfig();
   initForm();
   window.addEventListener("hashchange", route);
   // Chrome slows timers in background tabs (down to once a minute), so catch

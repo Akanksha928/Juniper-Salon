@@ -8,8 +8,9 @@ import { Worker } from "@temporalio/worker";
 import * as activities from "../src/activities";
 import { cancelOpening, dismissFilledNotice, getWaitlistStatus, markHandled, replyToOffer } from "../src/messages";
 import { readOutbox } from "../src/outbox";
-import { endOfDay, rejectionNotice } from "../src/shared";
-import type { Slot, WaitlistClient, WaitlistInput, WaitlistStatus } from "../src/types";
+import { weekdayOf } from "../src/matching";
+import { endOfDay, rejectionNotice, salonClock, salonTimeToMs } from "../src/shared";
+import type { Slot, TextingHours, WaitlistClient, WaitlistInput, WaitlistStatus, Weekday } from "../src/types";
 import { waitlistWorkflow } from "../src/workflows";
 
 const TASK_QUEUE = "waitlist-test";
@@ -88,6 +89,7 @@ async function startWaitlist(
   clients: WaitlistClient[] | Error = waitlist,
   date = SLOT_DATE,
   closesAt?: string,
+  extra: Partial<WaitlistInput> = {},
 ): Promise<WorkflowHandle<typeof waitlistWorkflow>> {
   // The test server's clock can jump years ahead while a test awaits a
   // result, so by default close a month after its current time rather than
@@ -99,7 +101,10 @@ async function startWaitlist(
   const input: WaitlistInput = {
     slot: { slotId: id, stylist: "Maya", service: "Cut & style", date, time: "14:00" },
     responseTimeoutMs: TIMEOUT_MS,
+    // Texting-hours tests that care about the slot's start pass their own.
+    startsAt: closesAt,
     closesAt,
+    ...extra,
   };
   return environment.client.workflow.start(waitlistWorkflow, {
     workflowId: id,
@@ -518,10 +523,10 @@ test("if booking fails after a yes, the front desk is asked to book them", async
   await outcome(handle);
 });
 
-test("endOfDay is midnight at the end of the date, in local time", () => {
-  const end = new Date(endOfDay("2026-10-06"));
-  assert.deepEqual([end.getFullYear(), end.getMonth() + 1, end.getDate()], [2026, 10, 7]);
-  assert.deepEqual([end.getHours(), end.getMinutes()], [0, 0]);
+test("endOfDay is midnight at the end of the date, in the salon's time zone", () => {
+  assert.equal(endOfDay("2026-10-06", "America/Los_Angeles"), "2026-10-07T07:00:00.000Z"); // PDT
+  assert.equal(endOfDay("2026-11-01", "America/Los_Angeles"), "2026-11-02T08:00:00.000Z"); // PST, after DST ends
+  assert.equal(endOfDay("2026-10-06", "UTC"), "2026-10-07T00:00:00.000Z");
 });
 
 test("a booked slot whose notice isn't dismissed closes at the end of its day", async () => {
@@ -550,6 +555,150 @@ test("a front-desk slot that isn't marked handled closes at the end of its day",
   assert.equal(result.closedAutomatically, true);
   assert.equal(result.events.at(-1)?.kind, "closed");
   await assert.rejects(handle.executeUpdate(markHandled)); // already ended
+});
+
+// ---------- Texting hours (Lena's rule) ----------
+
+const SALON_TZ = "America/Los_Angeles";
+const HOURS: TextingHours = { days: ["Tue", "Wed", "Thu", "Fri", "Sat"], from: "09:00", to: "19:00", timeZone: SALON_TZ };
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Moves the test server's clock forward to the next `weekday` at `time` in
+// the salon's time zone (at least an hour ahead, so it always moves forward).
+async function skipTo(weekday: Weekday, time: string): Promise<number> {
+  const now = await environment.currentTimeMs();
+  for (let offset = 0; offset <= 8; offset++) {
+    const date = salonClock(now + offset * DAY_MS, SALON_TZ).date;
+    const target = salonTimeToMs(date, time, SALON_TZ);
+    if (weekdayOf(date) !== weekday || target < now + 60 * 60 * 1000) continue;
+    await environment.sleep(target - now);
+    return target;
+  }
+  throw new Error(`no ${weekday} ${time} ahead`);
+}
+
+async function waitForWaiting(handle: WorkflowHandle<typeof waitlistWorkflow>): Promise<WaitlistStatus> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const status = await handle.query(getWaitlistStatus);
+    if (status.waitingUntil) return status;
+    await delay(50);
+  }
+  throw new Error("Workflow never started waiting for texting hours");
+}
+
+const salonTime = (iso: string) => salonClock(Date.parse(iso), SALON_TZ);
+
+test("a cancellation after hours waits until 9 AM to start texting", async () => {
+  const cancelledAt = await skipTo("Wed", "20:00");
+  const handle = await startWaitlist(waitlist, SLOT_DATE, undefined, { textingHours: HOURS });
+
+  const waiting = await waitForWaiting(handle);
+  assert.equal(waiting.message, "Waiting until Thu 9:00 AM to start texting.");
+  assert.deepEqual(salonTime(waiting.waitingUntil!), {
+    date: salonClock(cancelledAt + DAY_MS, SALON_TZ).date,
+    weekday: "Thu",
+    time: "09:00",
+  });
+  assert.equal(waiting.currentClientId, undefined);
+  assert.deepEqual(readOutbox(handle.workflowId), []); // nobody is texted overnight
+
+  // Skip the night: the durable timer fires at 9 AM and the first offer goes out.
+  await environment.sleep(Date.parse(waiting.waitingUntil!) - (await environment.currentTimeMs()) + 1000);
+  const offered = await waitForOfferTo(handle, "c1");
+  assert.equal(offered.waitingUntil, undefined);
+  assert.deepEqual(salonTime(offered.offers[0].offeredAt!).time, "09:00");
+  assert.deepEqual(readOutbox(handle.workflowId).map((m) => m.kind), ["offer"]);
+  await handle.executeUpdate(cancelOpening);
+  await outcome(handle);
+});
+
+test("a Sunday cancellation waits until Tuesday 9 AM", async () => {
+  const cancelledAt = await skipTo("Sun", "11:00");
+  const handle = await startWaitlist(waitlist, SLOT_DATE, undefined, { textingHours: HOURS });
+
+  const waiting = await waitForWaiting(handle);
+  assert.equal(waiting.message, "Waiting until Tue 9:00 AM to start texting.");
+  assert.deepEqual(salonTime(waiting.waitingUntil!), {
+    date: salonClock(cancelledAt + 2 * DAY_MS, SALON_TZ).date,
+    weekday: "Tue",
+    time: "09:00",
+  });
+
+  // A day later (Monday, still closed) nobody has been texted.
+  await environment.sleep(DAY_MS);
+  assert.equal((await handle.query(getWaitlistStatus)).currentClientId, undefined);
+  assert.deepEqual(readOutbox(handle.workflowId), []);
+
+  await environment.sleep(Date.parse(waiting.waitingUntil!) - (await environment.currentTimeMs()) + 1000);
+  const offered = await waitForOfferTo(handle, "c1");
+  assert.deepEqual(salonTime(offered.offers[0].offeredAt!), { ...salonTime(waiting.waitingUntil!) });
+  await handle.executeUpdate(cancelOpening);
+  await outcome(handle);
+});
+
+test("with the demo override (no texting hours), a Sunday cancellation texts right away", async () => {
+  await skipTo("Sun", "11:00");
+  const handle = await startWaitlist(waitlist, SLOT_DATE, undefined, { textingHours: undefined });
+
+  const offered = await waitForOfferTo(handle, "c1");
+  assert.equal(offered.waitingUntil, undefined);
+  assert.ok(!offered.events.some((e) => e.kind === "waiting"));
+  assert.equal(salonTime(offered.offers[0].offeredAt!).weekday, "Sun");
+  await handle.executeUpdate(cancelOpening);
+  await outcome(handle);
+});
+
+test("an offer only goes out if its whole reply window ends by closing time", async () => {
+  // 15-minute window: at 6:50 PM it would run to 7:05 PM, so wait for Wednesday.
+  await skipTo("Tue", "18:50");
+  const handle = await startWaitlist(waitlist, SLOT_DATE, undefined, { textingHours: HOURS });
+  const waiting = await waitForWaiting(handle);
+  assert.equal(waiting.message, "Waiting until Wed 9:00 AM to start texting.");
+  await handle.executeUpdate(cancelOpening);
+  await outcome(handle);
+});
+
+test("when the next client's window wouldn't fit, texting resumes the next morning", async () => {
+  // Priya is texted at 6:40 PM; her window runs out at 6:55, too late for Daniel's.
+  await skipTo("Tue", "18:40");
+  const handle = await startWaitlist(waitlist, SLOT_DATE, undefined, { textingHours: HOURS });
+  await waitForOfferTo(handle, "c1");
+  await environment.sleep(TIMEOUT_MS + 1000);
+
+  const waiting = await waitForWaiting(handle);
+  assert.equal(waiting.message, "Waiting until Wed 9:00 AM to resume texting.");
+  assert.deepEqual(waiting.offers.map((o) => o.state), ["timed_out"]);
+  await handle.executeUpdate(cancelOpening);
+  await outcome(handle);
+});
+
+test("the front desk can cancel while the Workflow waits for opening hours", async () => {
+  await skipTo("Sun", "11:00");
+  const handle = await startWaitlist(waitlist, SLOT_DATE, undefined, { textingHours: HOURS });
+  await waitForWaiting(handle);
+  await handle.executeUpdate(cancelOpening);
+
+  const result = await outcome(handle);
+  assert.equal(result.phase, "cancelled");
+  assert.equal(result.waitingUntil, undefined);
+  assert.deepEqual(readOutbox(handle.workflowId), []);
+});
+
+test("if texting can't resume until after the slot starts, it goes to the front desk now", async () => {
+  // Saturday 6:50 PM, for a 6:55 PM slot: texting resumes Tuesday, too late.
+  const now = await skipTo("Sat", "18:50");
+  const startsAt = new Date(now + 5 * 60 * 1000).toISOString();
+  const handle = await startWaitlist(waitlist, SLOT_DATE, undefined, { textingHours: HOURS, startsAt });
+
+  const status = await waitForFrontDesk(handle);
+  assert.equal(status.frontDeskReason, "Texting hours don't resume until Tue 9:00 AM, after the slot starts");
+  assert.deepEqual(status.offers, []);
+  assert.deepEqual(readOutbox(handle.workflowId).map((m) => `${m.kind}: ${m.body}`), [
+    "staff_alert: Texting hours don't resume until Tue 9:00 AM, after the slot starts. " +
+      "Please fill the 2:00 PM Cut & style with Maya on Mon, Jan 7 manually.",
+  ]);
+  await handle.executeUpdate(markHandled);
+  await outcome(handle);
 });
 
 // Keep last: replays the history of every Workflow the tests above ran
