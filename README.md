@@ -1,5 +1,7 @@
 # Juniper Salon same-day waitlist
 
+[![CI](https://github.com/Akanksha928/Juniper-Salon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Akanksha928/Juniper-Salon/actions/workflows/ci.yml)
+
 When a client cancels, Juniper Salon wants that slot offered to people on its waitlist straight away. This app does that, one client at a time, on [Temporal](https://temporal.io), so the offer keeps going even if the app restarts mid-way.
 
 ## What it does
