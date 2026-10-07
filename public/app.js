@@ -3,6 +3,7 @@ const els = {
   banners: $("#banners"),
   home: $("#home"),
   openings: $("#openings-list"),
+  filledNotices: $("#filled-notices"),
   board: $("#board"),
   form: $("#slot-form"),
   formError: $("#form-error"),
@@ -29,7 +30,10 @@ const els = {
 
 let workflowId;
 let status;
+// No Worker is answering, so the slot is paused (Temporal still holds it).
 let workerOffline = false;
+// Temporal or this app's server can't be reached at all.
+let systemUnavailable = false;
 let pollTimer;
 let polling = false;
 let toastTimer;
@@ -66,6 +70,8 @@ function formatSlotTime(date, time) {
 function isFinished(s) {
   return s && (
     s.phase === "booked" ||
+    // Booked and front-desk slots close themselves at the end of their day.
+    s.closedAutomatically ||
     // An unfilled slot stays open until the front desk marks it handled.
     (s.phase === "unfilled" && s.handled) ||
     // The Workflow adds its "cancelled" event after texting the offer holder.
@@ -139,6 +145,11 @@ async function handleSlotAction(event) {
       await staffAction(id, "cancel", "Opening cancelled.");
       confirmingCancel.delete(id);
       return workflowId ? poll() : refreshOpenings();
+    case "dismiss":
+      button.disabled = true;
+      if (await staffAction(id, "dismiss", "Notice dismissed.")) await refreshOpenings();
+      else button.disabled = false;
+      return;
     case "handled":
       button.disabled = true;
       if (!(await staffAction(id, "handled", "Marked handled and removed from openings."))) {
@@ -161,23 +172,44 @@ function showToast(message, isError = false) {
 // ---------- Openings ----------
 
 // The list comes from Temporal through the API, so every browser sees the
-// same openings: undefined until the first load, null if it failed.
+// same openings: undefined until the first load, null if it failed. Filled
+// slots leave the list but show a notice until someone dismisses it.
 let openings;
+let openingsError;
+let filled = [];
 let refreshingOpenings = false;
 
 function openingState(s) {
-  if (!s) return { key: "queued", label: "Worker offline" }; // listed, but no live status
+  if (!s) return { key: "queued", label: "Paused" }; // listed, but no Worker to give live status
   if (s.phase === "unfilled") return { key: "unfilled", label: "Needs front desk" };
   return { key: "offering", label: "Texting a client" };
 }
 
+function renderFilledNotices() {
+  setHtml(els.filledNotices, filled
+    .map(({ workflowId: id, slot, status: s }) => {
+      const client = s.waitlist.find((c) => c.clientId === s.bookedClientId);
+      const when = new Date(`${slot.date}T${slot.time}`);
+      const time = when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      const day = when.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+      return `<div class="banner success notice"><span class="banner-icon">✓</span>
+        <div><a href="#${encodeURIComponent(id)}"><strong>Filled: ${escapeHtml(client?.name ?? "A client")} took
+          ${escapeHtml(slot.stylist)}'s ${escapeHtml(time)} ${escapeHtml(slot.service)}</strong></a>
+          on ${escapeHtml(day)} ${SIMULATED_BOOKING}</div>
+        <button type="button" class="quiet" data-action="dismiss" data-id="${escapeHtml(id)}">Dismiss</button>
+      </div>`;
+    })
+    .join(""));
+}
+
 function renderOpenings() {
+  renderFilledNotices();
   if (openings === undefined) {
     setHtml(els.openings, `<li class="empty">Loading openings…</li>`);
     return;
   }
   if (openings === null) {
-    setHtml(els.openings, `<li class="empty">Could not load openings. Retrying…</li>`);
+    setHtml(els.openings, `<li class="empty">${escapeHtml(openingsError ?? "Could not load openings.")} Retrying…</li>`);
     return;
   }
   if (!openings.length) {
@@ -204,6 +236,7 @@ function renderOpenings() {
             <p class="opening-time">${escapeHtml(formatSlotTime(o.date, o.time))}</p>
             ${offerLine}
             ${summary ? `<p class="opening-summary">${summary}</p>` : ""}
+            ${s?.error ? `<p class="opening-error">${escapeHtml(s.error)}</p>` : ""}
           </div>
           <span class="pill ${state.key}">${state.label}</span>
         </a>
@@ -216,12 +249,14 @@ function renderOpenings() {
 
 // "1 declined · 1 no reply · 2 left", where "left" is who hasn't been texted yet.
 function offerSummary(s) {
-  if (!s.waitlist.length) return s.phase === "offering" ? "" : "No matching clients";
+  // With an error, the waitlist may be empty only because it couldn't be read.
+  if (!s.waitlist.length) return s.phase === "offering" || s.error ? "" : "No matching clients";
   const count = (state) => s.offers.filter((o) => o.state === state).length;
   const left = s.waitlist.filter((c) => !s.offers.some((o) => o.clientId === c.clientId)).length;
   const parts = [];
   if (count("declined")) parts.push(`${count("declined")} declined`);
   if (count("timed_out")) parts.push(`${count("timed_out")} no reply`);
+  if (count("not_sent")) parts.push(`${count("not_sent")} couldn't be texted`);
   if (s.phase === "offering") parts.push(`${left} left`);
   return parts.join(" · ");
 }
@@ -233,15 +268,20 @@ function updateOfferTimers() {
 }
 
 els.openings.addEventListener("click", handleSlotAction);
+els.filledNotices.addEventListener("click", handleSlotAction);
 
 async function refreshOpenings() {
   if (refreshingOpenings) return;
   refreshingOpenings = true;
   try {
     const response = await fetch("/api/slots");
-    openings = response.ok ? await response.json() : null;
+    const body = await response.json();
+    openings = response.ok ? body.openings : null;
+    openingsError = response.ok ? undefined : body.error;
+    filled = response.ok ? body.filled : filled;
   } catch {
     openings = null;
+    openingsError = "Could not reach the salon server.";
   } finally {
     refreshingOpenings = false;
   }
@@ -391,24 +431,51 @@ function clientState(client) {
     case "declined": return { key: "declined", label: "Declined" };
     case "timed_out": return { key: "timed_out", label: "No reply" };
     case "withdrawn": return { key: "skipped", label: "Offer withdrawn" };
+    case "not_sent": return { key: "not_sent", label: "Couldn't text" };
   }
 }
 
 function renderBanners() {
   const banners = [];
+  // Written for front desk staff; the collapsed note is for whoever runs the system.
+  if (systemUnavailable) {
+    banners.push(`<div class="banner error"><span class="banner-icon">!</span><div>
+      <strong>The waitlist system isn't responding</strong>This page can't update right now. Nothing in progress is
+      lost, and the page catches up by itself once it's back. If this lasts more than a few minutes, let whoever
+      looks after the system know.
+      <details class="tech-note"><summary>Technical details</summary>The app can't reach its server or Temporal.
+      Check that Docker Desktop is running, then start Temporal with <code>npm run start:temporal</code>.</details>
+      </div></div>`);
+  }
+  if (status?.error) {
+    banners.push(`<div class="banner error"><span class="banner-icon">!</span><div>
+      <strong>Something went wrong</strong>${escapeHtml(status.error)}</div></div>`);
+  }
+  if (status?.closedAutomatically) {
+    banners.push(`<div class="banner cancelled"><span class="banner-icon">✓</span><div>
+      <strong>Closed at the end of the day</strong>The slot's day is over, so it was closed automatically and taken
+      off the openings list.</div></div>`);
+  }
   if (workerOffline) {
     banners.push(`<div class="banner offline"><span class="banner-icon">⏸</span><div>
-      <strong>Worker offline</strong>Temporal is holding this waitlist safely, including any running timers.
-      Restart the Worker and it picks up exactly where it left off.</div></div>`);
+      <strong>The waitlist is paused for a moment</strong>Texts and replies are on hold. Nothing is lost: it
+      picks up exactly where it left off, including any reply timers. If this lasts more than a few minutes, let
+      whoever looks after the system know.
+      <details class="tech-note"><summary>Technical details</summary>No Worker is running. Temporal is holding
+      this Workflow safely. Start the Worker with <code>npm run dev:worker</code>.</details></div></div>`);
   }
   if (status?.phase === "unfilled" && status.handled) {
     banners.push(`<div class="banner cancelled"><span class="banner-icon">✓</span><div>
       <strong>Handled by the front desk</strong>This slot is closed and off the openings list.</div></div>`);
-  } else if (status?.phase === "unfilled") {
+  } else if (status?.phase === "unfilled" && !status.closedAutomatically) {
+    const slotName = `${escapeHtml(status.slot.stylist)}'s ${escapeHtml(formatSlotTime(status.slot.date, status.slot.time))}
+      ${escapeHtml(status.slot.service)}`;
+    const why = status.error
+      ? `The waitlist couldn't finish filling ${slotName} on its own (see above).`
+      : `Nobody on the waitlist ${status.waitlist.length ? "took" : "matches"} ${slotName}.`;
     banners.push(`<div class="banner staff"><span class="banner-icon">⚠</span><div>
-      <strong>Front desk: this slot needs you</strong>Nobody on the waitlist ${status.waitlist.length ? "took" : "matches"}
-      ${escapeHtml(status.slot.stylist)}'s ${escapeHtml(formatSlotTime(status.slot.date, status.slot.time))}
-      ${escapeHtml(status.slot.service)}. ${status.staffNotified ? "Staff have been alerted." : "Alerting staff…"}</div></div>`);
+      <strong>Front desk: this slot needs you</strong>${why}
+      ${status.staffNotified ? "Staff have been alerted." : "Alerting staff…"}</div></div>`);
   }
   if (status?.phase === "cancelled") {
     banners.push(`<div class="banner cancelled"><span class="banner-icon">✕</span><div>
@@ -491,7 +558,7 @@ function renderBoard() {
 }
 
 function renderOutbox(outbox) {
-  els.outboxNote.textContent = outbox.available ? "" : "· simulated gateway offline";
+  els.outboxNote.textContent = outbox.available ? "" : "· can't load texts right now";
   if (!outbox.messages.length) {
     els.outbox.innerHTML = `<li class="empty">${outbox.available ? "No texts yet." : "Outbox resets when the Worker restarts."}</li>`;
     return;
@@ -559,13 +626,17 @@ async function poll() {
       location.hash = "";
       return;
     }
-    workerOffline = statusResponse.status === 503;
-    if (statusResponse.ok) status = await statusResponse.json();
+    const statusBody = await statusResponse.json();
+    workerOffline = statusResponse.status === 503 && Boolean(statusBody.workerOffline);
+    systemUnavailable = statusResponse.status === 503 && !statusBody.workerOffline;
+    if (statusResponse.ok) status = statusBody;
     renderBoard();
     renderOutbox(await outboxResponse.json());
-    if (isFinished(status) && !workerOffline) stopPolling();
+    if (isFinished(status) && !workerOffline && !systemUnavailable) stopPolling();
   } catch {
-    workerOffline = true;
+    // This app's own server didn't answer.
+    workerOffline = false;
+    systemUnavailable = true;
     renderBanners();
   } finally {
     polling = false;
@@ -584,6 +655,7 @@ function route() {
   workflowId = decodeURIComponent(location.hash.slice(1)) || undefined;
   status = undefined;
   workerOffline = false;
+  systemUnavailable = false;
   els.banners.innerHTML = "";
   els.home.hidden = Boolean(workflowId);
   els.board.hidden = !workflowId;
@@ -604,6 +676,13 @@ function route() {
 async function init() {
   initForm();
   window.addEventListener("hashchange", route);
+  // Chrome slows timers in background tabs (down to once a minute), so catch
+  // up as soon as the tab is visible again.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (workflowId) poll();
+    else refreshOpenings();
+  });
   setInterval(() => {
     updateCountdowns();
     updateOfferTimers();

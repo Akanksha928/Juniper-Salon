@@ -21,8 +21,9 @@ function slotDay(slot: Slot): string {
 // Clients who want this service, are free at this time, and either have no
 // stylist preference or prefer this stylist, earliest to join first.
 // Reads data/waitlist.csv fresh each time; in production this would read the
-// salon's Google Sheet. If the file can't be read, the Activity retries, so
-// fixing the file lets a waiting slot carry on.
+// salon's Google Sheet. If the file can't be read, the Activity retries a few
+// times (fixing the file quickly lets the slot carry on); after that the
+// Workflow hands the slot to the front desk and shows the error.
 export async function findMatchingClients(slot: Slot): Promise<WaitlistClient[]> {
   return matchClients(slot, await loadWaitlist()).map(({ clientId, name, phone }) => ({ clientId, name, phone }));
 }
@@ -89,18 +90,34 @@ export async function sendCancellationNotice(input: {
   });
 }
 
-export async function notifyStaff(input: { slot: Slot; clientsOffered: number }): Promise<void> {
-  const { slot, clientsOffered } = input;
+export async function notifyFrontDeskFilled(input: { slot: Slot; client: WaitlistClient }): Promise<void> {
+  const { slot, client } = input;
+  recordMessage({
+    id: `${workflowId()}:staff_filled`,
+    workflowId: workflowId(),
+    kind: "staff_filled",
+    to: "front-desk",
+    toName: "Front desk",
+    body: `Filled: ${client.name} booked the ${describeSlot(slot, today())} (simulated — Square not updated).`,
+  });
+}
+
+// `problem` is set when the slot needs the front desk because a step failed,
+// e.g. the waitlist couldn't be read, rather than because nobody took it.
+export async function notifyStaff(input: { slot: Slot; clientsOffered: number; problem?: string }): Promise<void> {
+  const { slot, clientsOffered, problem } = input;
+  const described = describeSlot(slot, today());
   recordMessage({
     id: `${workflowId()}:staff_alert`,
     workflowId: workflowId(),
     kind: "staff_alert",
     to: "front-desk",
     toName: "Front desk",
-    body:
-      clientsOffered === 0
-        ? `Nobody on the waitlist matches the ${describeSlot(slot, today())}. Please fill it manually.`
-        : `Nobody on the waitlist took the ${describeSlot(slot, today())} ` +
+    body: problem
+      ? `${problem}. Please fill the ${described} manually.`
+      : clientsOffered === 0
+        ? `Nobody on the waitlist matches the ${described}. Please fill it manually.`
+        : `Nobody on the waitlist took the ${described} ` +
           `(${clientsOffered} client${clientsOffered === 1 ? "" : "s"} offered). Please fill it manually.`,
   });
 }

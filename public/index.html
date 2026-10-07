@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Juniper Salon Waitlist</title>
+    <title>Juniper Salon · Last-minute openings</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -12,10 +13,9 @@
         <span class="brand-mark" aria-hidden="true">J</span>
         <div>
           <p class="brand-name">Juniper Salon</p>
-          <p class="brand-sub">Same-day waitlist</p>
+          <p class="brand-sub">Last-minute openings</p>
         </div>
       </div>
-      <a class="temporal-link" href="http://localhost:8233" target="_blank" rel="noopener">Temporal UI ↗</a>
     </header>
     <div class="demo-banner" role="note">Demo mode: texts and Square updates are simulated</div>
 
@@ -23,6 +23,8 @@
       <div id="banners"></div>
 
       <div id="home">
+      <!-- Filled slots, until the front desk dismisses them -->
+      <div id="filled-notices"></div>
       <!-- Openings that need filling -->
       <section id="openings" class="card openings-card">
         <p class="section-label">Openings</p>
@@ -33,6 +35,7 @@
       <div class="demo-toggles">
         <button type="button" id="toggle-setup" class="secondary demo-toggle" aria-expanded="false" aria-controls="setup">Simulate a cancellation (demo)</button>
         <button type="button" id="toggle-waitlist" class="secondary demo-toggle" aria-expanded="false" aria-controls="waitlist">Waitlist (demo data — in production this is the salon's Google Sheet)</button>
+        <a class="secondary demo-toggle temporal-link" href="http://localhost:8233" target="_blank" rel="noopener">Temporal UI (for developers) ↗</a>
       </div>
       <section id="setup" class="card demo-card" hidden>
         <p class="demo-label">In production, cancellations come from Square.</p>

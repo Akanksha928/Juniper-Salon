@@ -27,15 +27,26 @@ async function waitForPort(port, timeoutMs = 60_000) {
 }
 
 await waitForPort(7233);
-const children = [
-  spawn("npm", ["run", "dev:worker"], { stdio: "inherit" }),
-  spawn("npm", ["run", "dev:api"], { stdio: "inherit" }),
-];
+// On Windows npm is npm.cmd, which Node can only start through a shell. The
+// command is passed as one fixed string, since a shell with separate
+// arguments is deprecated.
+const isWindows = process.platform === "win32";
+const npmRun = (script) =>
+  isWindows
+    ? spawn(`npm run ${script}`, { stdio: "inherit", shell: true })
+    : spawn("npm", ["run", script], { stdio: "inherit" });
+const children = [npmRun("dev:worker"), npmRun("dev:api")];
+// Killing the shell on Windows would leave the Worker and API running, so
+// end each whole process tree instead.
+function stop(child) {
+  if (isWindows) spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+  else child.kill("SIGTERM");
+}
 let shuttingDown = false;
 function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const child of children) child.kill("SIGTERM");
+  for (const child of children) stop(child);
   process.exit(exitCode);
 }
 process.on("SIGINT", () => shutdown(0));
@@ -48,7 +59,7 @@ for (const child of children) {
     }
   });
 }
-console.log("\nStarter is launching:");
+console.log("\nJuniper Salon waitlist is starting:");
 console.log("  App:         http://localhost:3000");
 console.log("  Temporal UI: http://localhost:8233\n");
 

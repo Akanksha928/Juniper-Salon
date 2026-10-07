@@ -26,13 +26,15 @@ body { margin: 0; background: var(--bg); }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--brand); color: white; font-family: Georgia, serif; font-size: 1.2rem; }
 .brand-name { margin: 0; font-family: Georgia, serif; font-size: 1.15rem; }
 .brand-sub { margin: 0; color: var(--muted); font-size: 0.8rem; }
-.temporal-link { color: var(--muted); font-size: 0.85rem; text-decoration: none; }
-.temporal-link:hover { color: var(--brand); }
+/* A link styled like the demo buttons beside it. */
+.temporal-link { display: inline-block; padding: 10px 18px; border: 1px solid; border-radius: 999px; font-weight: 700; text-decoration: none; }
+.temporal-link:hover { border-color: var(--brand); color: var(--brand); }
 
 .demo-banner { padding: 8px 16px; border-bottom: 1px solid #e6b97c; background: var(--amber-soft); color: #6b4210; font-size: 0.82rem; font-weight: 700; text-align: center; }
 .sim-note { display: block; margin-top: 4px; color: var(--muted); font-size: 0.75rem; font-weight: 600; }
 .client-status { text-align: right; }
 .opening-summary { margin: 4px 0 0; color: var(--muted); font-size: 0.82rem; }
+.opening-error { margin: 4px 0 0; color: var(--red); font-size: 0.82rem; }
 
 main { width: min(1080px, calc(100% - 32px)); margin: 28px auto 60px; }
 .card { padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
@@ -100,7 +102,14 @@ button:disabled { cursor: default; opacity: 0.5; }
 .banner.staff { border-color: #e6b97c; background: var(--amber-soft); color: #6b4210; }
 .banner.success { border-color: #a8d5b8; background: var(--green-soft); color: #1d5435; }
 .banner.cancelled { border-color: #c9c3b6; background: #ece8df; color: #4c524f; }
+.banner.notice { align-items: center; }
+.banner.notice > div { flex: 1; }
+.banner.notice a { color: inherit; }
+.banner.notice .quiet { flex-shrink: 0; }
 .banner.offline { border-color: #c9c3b6; background: #ece8df; color: #4c524f; }
+.banner.error { border-color: #e3b5ae; background: var(--red-soft); color: #7a2a20; }
+.tech-note { margin-top: 6px; font-size: 0.8rem; opacity: 0.85; }
+.tech-note summary { cursor: pointer; }
 
 /* Board */
 .back-link { display: inline-block; margin-bottom: 12px; color: var(--muted); font-size: 0.88rem; font-weight: 600; text-decoration: none; }
@@ -125,6 +134,7 @@ button:disabled { cursor: default; opacity: 0.5; }
 .pill.booked { white-space: normal; }
 .pill.unfilled { background: var(--red-soft); color: var(--red); }
 .pill.cancelled { background: #eeeae2; color: var(--muted); }
+.pill.not_sent { background: var(--red-soft); color: var(--red); }
 .pill.queued, .pill.skipped { background: transparent; border: 1px solid var(--line); color: var(--muted); }
 
 /* Clients */
@@ -150,15 +160,16 @@ button:disabled { cursor: default; opacity: 0.5; }
 .timeline li.timed_out::before { background: var(--amber); }
 .timeline li.declined::before { background: #b6b0a4; }
 .timeline li.accepted::before, .timeline li.booked::before { background: var(--green); }
-.timeline li.staff::before { background: var(--red); }
-.timeline li.cancelled::before, .timeline li.handled::before { background: var(--muted); }
+.timeline li.staff::before, .timeline li.error::before { background: var(--red); }
+.timeline li.closed::before { background: var(--muted); }
+.timeline li.cancelled::before, .timeline li.handled::before, .timeline li.dismissed::before { background: var(--muted); }
 .timeline time { display: block; color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 
 /* Outbox */
 .outbox { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .sms { padding: 10px 12px; border-radius: 12px 12px 12px 4px; background: #f1ede4; font-size: 0.88rem; line-height: 1.4; }
 .sms.staff_alert { background: var(--amber-soft); }
-.sms.confirmation { background: var(--green-soft); }
+.sms.confirmation, .sms.staff_filled { background: var(--green-soft); }
 .sms.rejection, .sms.cancellation { background: #eeeae2; }
 .sms-to { display: flex; justify-content: space-between; margin-bottom: 4px; color: var(--muted); font-size: 0.75rem; font-weight: 700; }
 .empty { color: var(--muted); font-size: 0.88rem; }

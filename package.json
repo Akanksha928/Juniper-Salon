@@ -1,8 +1,8 @@
 {
-  "name": "temporal-assessment-starter",
+  "name": "juniper-salon-waitlist",
   "version": "1.0.0",
   "private": true,
-  "description": "Student starter for the Temporal post-assessment.",
+  "description": "Same-day waitlist for Juniper Salon: offers cancelled slots to waitlisted clients one at a time, built on Temporal.",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:api": "tsx src/api.ts",

@@ -8,9 +8,9 @@ import {
   WorkflowUpdateFailedError,
 } from "@temporalio/client";
 import express, { type NextFunction, type Request, type Response } from "express";
-import { cancelOpening, getWaitlistStatus, markHandled, replyToOffer } from "./messages";
+import { cancelOpening, dismissFilledNotice, getWaitlistStatus, markHandled, replyToOffer } from "./messages";
 import { matchClients } from "./matching";
-import { localDate, rejectionNotice, TASK_QUEUE } from "./shared";
+import { endOfDay, localDate, rejectionNotice, TASK_QUEUE } from "./shared";
 import type { Slot, StaffActionResult, WaitlistInput, WaitlistStatus } from "./types";
 import { loadWaitlist } from "./waitlist";
 import type { waitlistWorkflow } from "./workflows";
@@ -25,12 +25,66 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), "public")));
 
+// Shown to front desk staff, so no technical terms. The server log has the
+// details.
+const TEMPORAL_UNAVAILABLE = "The waitlist system isn't responding right now.";
+const WORKER_UNAVAILABLE = "The waitlist is paused for a moment. Please try again shortly.";
+
 let clientPromise: Promise<Client> | undefined;
 function getClient(): Promise<Client> {
   clientPromise ??= Connection.connect({
     address: process.env.TEMPORAL_ADDRESS ?? "localhost:7233",
-  }).then((connection) => new Client({ connection, namespace: "default" }));
+  })
+    .then((connection) => new Client({ connection, namespace: "default" }))
+    .catch((error: unknown) => {
+      // Forget the failed attempt, so the next request tries again once
+      // Temporal is up instead of failing until the API restarts.
+      clientPromise = undefined;
+      throw error;
+    });
   return clientPromise;
+}
+
+// The Temporal Client, or undefined after answering 503 if Temporal can't be
+// reached.
+async function clientOrUnavailable(response: Response): Promise<Client | undefined> {
+  try {
+    return await getClient();
+  } catch (error) {
+    console.error(error);
+    response.status(503).json({ error: TEMPORAL_UNAVAILABLE });
+    return undefined;
+  }
+}
+
+// A query or Update that times out means either no Worker answered or
+// Temporal itself is down. A quick call to Temporal tells which, so the page
+// can say the right thing.
+async function respondUnavailable(client: Client, response: Response, error: unknown): Promise<void> {
+  const temporalUp = await client
+    .withDeadline(Date.now() + 1000, () => client.workflowService.getSystemInfo({}))
+    .then(
+      () => true,
+      () => false,
+    );
+  if (temporalUp) {
+    // The Workflow itself is still safe in Temporal; it just needs a Worker.
+    response.status(503).json({ error: WORKER_UNAVAILABLE, workerOffline: true });
+    return;
+  }
+  console.error(error);
+  response.status(503).json({ error: TEMPORAL_UNAVAILABLE });
+}
+
+// Updates on a Workflow that has finished fail as "not found", just like an
+// ID that never existed. Describing the Workflow tells the two apart.
+async function workflowExists(client: Client, workflowId: string): Promise<boolean> {
+  try {
+    await client.workflow.getHandle(workflowId).describe();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function slug(value: string): string {
@@ -40,10 +94,6 @@ function slug(value: string): string {
 function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
-
-app.get("/api/config", (_request, response) => {
-  response.json({ responseTimeoutSeconds: RESPONSE_TIMEOUT_SECONDS });
-});
 
 function isSlot(value: Record<string, unknown>): boolean {
   return (
@@ -113,9 +163,11 @@ app.post("/api/slots", async (request, response) => {
   const input: WaitlistInput = {
     slot: { slotId, stylist: stylist.trim(), service: service.trim(), date, time },
     responseTimeoutMs: RESPONSE_TIMEOUT_SECONDS * 1000,
+    closesAt: endOfDay(date),
   };
 
-  const client = await getClient();
+  const client = await clientOrUnavailable(response);
+  if (!client) return;
   try {
     await client.workflow.start<typeof waitlistWorkflow>("waitlistWorkflow", {
       workflowId,
@@ -133,16 +185,19 @@ app.post("/api/slots", async (request, response) => {
       });
       return;
     }
-    throw error;
+    console.error(error);
+    response.status(503).json({ error: TEMPORAL_UNAVAILABLE });
+    return;
   }
   response.status(201).json({ workflowId });
 });
 
-// Every open waitlist, from Temporal, so every browser sees the same list. A
-// waitlist Workflow keeps running until its slot is booked, cancelled, or
-// marked handled by the front desk.
+// Every running waitlist Workflow, from Temporal, so every browser sees the
+// same thing: "openings" still need filling (or the front desk), "filled" are
+// booked slots whose notice nobody has dismissed yet.
 app.get("/api/slots", async (_request, response) => {
-  const client = await getClient();
+  const client = await clientOrUnavailable(response);
+  if (!client) return;
   const running: { workflowId: string; slot?: Slot }[] = [];
   try {
     const query = `WorkflowType = 'waitlistWorkflow' AND ExecutionStatus = 'Running'`;
@@ -150,10 +205,10 @@ app.get("/api/slots", async (_request, response) => {
       running.push({ workflowId: workflow.workflowId, slot: workflow.memo?.slot as Slot | undefined });
     }
   } catch {
-    response.status(503).json({ error: "Could not reach Temporal." });
+    response.status(503).json({ error: TEMPORAL_UNAVAILABLE });
     return;
   }
-  const openings = await Promise.all(
+  const slots = await Promise.all(
     running.map(async ({ workflowId, slot }) => {
       try {
         const status = await client.withDeadline(Date.now() + WORKER_DEADLINE_MS, () =>
@@ -166,13 +221,18 @@ app.get("/api/slots", async (_request, response) => {
       }
     }),
   );
-  // Hide slots in the moment between being booked/cancelled/handled and ending.
-  const done = (s: WaitlistStatus | null) => s?.phase === "booked" || s?.phase === "cancelled" || s?.handled;
-  response.json(openings.filter((o) => o.slot && !done(o.status)));
+  const listed = slots.filter((s) => s.slot);
+  // Cancelled and handled slots are hidden in the moment before they end.
+  const open = (s: WaitlistStatus | null) => s?.phase !== "booked" && s?.phase !== "cancelled" && !s?.handled;
+  response.json({
+    openings: listed.filter((s) => open(s.status)),
+    filled: listed.filter((s) => s.status?.phase === "booked" && !s.status.filledNoticeDismissed),
+  });
 });
 
 app.get("/api/slots/:workflowId", async (request, response) => {
-  const client = await getClient();
+  const client = await clientOrUnavailable(response);
+  if (!client) return;
   const handle = client.workflow.getHandle(request.params.workflowId);
   try {
     const status = await client.withDeadline(Date.now() + WORKER_DEADLINE_MS, () =>
@@ -184,8 +244,7 @@ app.get("/api/slots/:workflowId", async (request, response) => {
       response.status(404).json({ error: "No waitlist found for this slot." });
       return;
     }
-    // Queries need a Worker; the Workflow itself is still safe in Temporal.
-    response.status(503).json({ error: "Worker unavailable", workerOffline: true });
+    await respondUnavailable(client, response, error);
   }
 });
 
@@ -215,8 +274,10 @@ app.post("/api/slots/:workflowId/reply", async (request, response) => {
     response.status(400).json({ error: "Please provide clientId and accept." });
     return;
   }
-  const client = await getClient();
-  const handle = client.workflow.getHandle(request.params.workflowId);
+  const client = await clientOrUnavailable(response);
+  if (!client) return;
+  const { workflowId } = request.params;
+  const handle = client.workflow.getHandle(workflowId);
   try {
     const result = await client.withDeadline(Date.now() + WORKER_DEADLINE_MS, () =>
       handle.executeUpdate(replyToOffer, { args: [{ clientId, accept }] }),
@@ -224,16 +285,20 @@ app.post("/api/slots/:workflowId/reply", async (request, response) => {
     response.json(result);
   } catch (error) {
     if (error instanceof WorkflowUpdateFailedError) {
-      await textRejectedClient(request.params.workflowId, clientId);
+      await textRejectedClient(workflowId, clientId);
       response.status(409).json({ error: error.cause?.message ?? "Reply rejected." });
       return;
     }
-    if (error instanceof WorkflowNotFoundError || /completed/i.test(String(error))) {
-      await textRejectedClient(request.params.workflowId, clientId);
+    if (error instanceof WorkflowNotFoundError) {
+      if (!(await workflowExists(client, workflowId))) {
+        response.status(404).json({ error: "No waitlist found for this slot." });
+        return;
+      }
+      await textRejectedClient(workflowId, clientId);
       response.status(409).json({ error: "Sorry, this offer has closed." });
       return;
     }
-    response.status(503).json({ error: "The salon system is busy. Please try again.", workerOffline: true });
+    await respondUnavailable(client, response, error);
   }
 });
 
@@ -243,10 +308,12 @@ app.post("/api/slots/:workflowId/reply", async (request, response) => {
 async function staffAction(
   request: Request,
   response: Response,
-  update: typeof cancelOpening | typeof markHandled,
+  update: typeof cancelOpening | typeof markHandled | typeof dismissFilledNotice,
 ): Promise<void> {
-  const client = await getClient();
-  const handle = client.workflow.getHandle(String(request.params.workflowId));
+  const client = await clientOrUnavailable(response);
+  if (!client) return;
+  const workflowId = String(request.params.workflowId);
+  const handle = client.workflow.getHandle(workflowId);
   try {
     const result: StaffActionResult = await client.withDeadline(Date.now() + WORKER_DEADLINE_MS, () =>
       handle.executeUpdate(update),
@@ -257,16 +324,23 @@ async function staffAction(
       response.status(409).json({ error: error.cause?.message ?? "That action isn't possible right now." });
       return;
     }
-    if (error instanceof WorkflowNotFoundError || /completed/i.test(String(error))) {
+    if (error instanceof WorkflowNotFoundError) {
+      if (!(await workflowExists(client, workflowId))) {
+        response.status(404).json({ error: "No waitlist found for this slot." });
+        return;
+      }
       response.status(409).json({ error: "This opening has already closed." });
       return;
     }
-    response.status(503).json({ error: "The salon system is busy. Please try again.", workerOffline: true });
+    await respondUnavailable(client, response, error);
   }
 }
 
 app.post("/api/slots/:workflowId/cancel", (request, response) => staffAction(request, response, cancelOpening));
 app.post("/api/slots/:workflowId/handled", (request, response) => staffAction(request, response, markHandled));
+app.post("/api/slots/:workflowId/dismiss", (request, response) =>
+  staffAction(request, response, dismissFilledNotice),
+);
 
 app.get("/api/outbox", async (request, response) => {
   const workflowId = typeof request.query.workflowId === "string" ? request.query.workflowId : "";
@@ -274,6 +348,7 @@ app.get("/api/outbox", async (request, response) => {
     const outbox = await fetch(`${OUTBOX_URL}?workflowId=${encodeURIComponent(workflowId)}`, {
       signal: AbortSignal.timeout(1000),
     });
+    if (!outbox.ok) throw new Error(`Outbox answered ${outbox.status}`);
     response.json({ available: true, messages: await outbox.json() });
   } catch {
     response.json({ available: false, messages: [] });

@@ -6,3 +6,4 @@ export const getWaitlistStatus = defineQuery<WaitlistStatus>("getWaitlistStatus"
 export const replyToOffer = defineUpdate<ReplyResult, [ReplyInput]>("replyToOffer");
 export const cancelOpening = defineUpdate<StaffActionResult, []>("cancelOpening");
 export const markHandled = defineUpdate<StaffActionResult, []>("markHandled");
+export const dismissFilledNotice = defineUpdate<StaffActionResult, []>("dismissFilledNotice");

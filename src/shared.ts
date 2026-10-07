@@ -30,6 +30,15 @@ export function localDate(now: Date): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
+// Midnight at the end of `date` (YYYY-MM-DD) in this process's local time
+// zone, as an ISO instant. Depends on the time zone, so never call it inside
+// the Workflow: the API works it out and passes it in.
+export function endOfDay(date: string): string {
+  const end = new Date(`${date}T00:00`);
+  end.setDate(end.getDate() + 1);
+  return end.toISOString();
+}
+
 // "5:00 PM Cut & style with Maya today" or "... with Maya on Mon, Oct 19".
 export function describeSlot(slot: Slot, today: string): string {
   return `${formatTime(slot.time)} ${slot.service} with ${slot.stylist} ${formatSlotDay(slot.date, today)}`;
