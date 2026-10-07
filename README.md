@@ -1,4 +1,4 @@
-# Juniper Salon same-day waitlist
+# Juniper Salon · Last-minute openings
 
 [![CI](https://github.com/Akanksha928/Juniper-Salon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Akanksha928/Juniper-Salon/actions/workflows/ci.yml)
 
@@ -21,7 +21,7 @@ Replies that come late or out of turn are turned away and the client gets a "sor
 
 Booked and front-desk slots close automatically at the end of the slot's day if nobody dismisses or handles them, so old openings don't pile up.
 
-Clients are only texted during opening hours, Tuesday–Saturday 9 AM–7 PM by default (see [Texting hours](#texting-hours)).
+Clients are only texted during opening hours, Tuesday–Saturday 9 AM–7 PM by default (see [Quiet hours](#quiet-hours)).
 
 If a step keeps failing, the Workflow stops retrying after 5 tries (about 15 seconds), shows the error on the slot's page and timeline, and carries on as best it can. Examples: the waitlist file can't be read, a text can't be sent, or the booking fails.
 
@@ -83,6 +83,39 @@ npm test          # Workflow, matching and CSV tests (no Docker needed)
 npm run typecheck # Check TypeScript
 ```
 
+### Reply window: 30 seconds in the demo, 15 minutes by default
+
+Each client has a set time to reply before the offer moves on. The Workflow's default is **15 minutes**, the real-world setting. `npm run dev` passes **30 seconds** instead, so you can watch offers time out without waiting. Change it with `RESPONSE_TIMEOUT_SECONDS`.
+
+## Quiet hours
+
+Lena's rule: **client texts only go out Tuesday–Saturday, 9 AM–7 PM, salon local time.** Front desk messages aren't restricted.
+
+- **Offers wait for opening time.** Before each offer, the Workflow checks the time. Outside hours it waits on a durable Temporal timer until the next opening time, then texts. The wait survives Worker restarts, and the front desk can still cancel the opening meanwhile. The openings card and the slot's page show "Waiting until Tue 9:00 AM to start texting" (or "to resume texting", if it ran out of time mid-list).
+- **An offer must fit before closing.** An offer only goes out if its whole reply window ends by 7 PM. With a 15-minute window, the last offer of the day goes out at 6:45 PM. So confirmations, which follow a YES within the window, never go out after 7 either.
+- **Too late means the front desk.** If texting couldn't resume until after the slot starts (say, a Saturday 6:55 PM slot cancelled at 6:50 PM), the slot goes straight to the front desk with that reason instead of waiting.
+- **Sorry texts are skipped after hours.** A late or out-of-turn reply outside opening hours is still turned away, but the client isn't texted.
+- **Slots must be in opening hours.** The cancellation form only allows them, and the API rejects others.
+
+The hours are a setting (`SALON_HOURS`, below). Each slot keeps the hours it was opened with. To demo outside opening hours, turn quiet hours off with `IGNORE_QUIET_HOURS` ([below](#demoing-outside-opening-hours)).
+
+## Settings
+
+All optional, set as environment variables.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `RESPONSE_TIMEOUT_SECONDS` | `30` | Reply window per offer, in seconds. `npm run dev` uses 30 for demos; the Workflow's own default is 15 minutes. |
+| `WAITLIST_CSV` | `data/waitlist.csv` | Path to the waitlist file. |
+| `PORT` | `3000` | Port for the web app and API. |
+| `OUTBOX_PORT` | `3001` | Port where the Worker serves the simulated text outbox to the API (local only). |
+| `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal server address. |
+| `SALON_HOURS` | `Tue-Sat 09:00-19:00` | Opening hours: when slots can be and when clients can be texted. Same format as the waitlist's availability column, one window only. |
+| `SALON_TIME_ZONE` | This machine's time zone | The salon's [IANA time zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `America/Los_Angeles`. Used for opening hours and the end of a slot's day. |
+| `IGNORE_QUIET_HOURS` | off | Set to `true` to text clients at any time, for demos ([below](#demoing-outside-opening-hours)). |
+
+"Today" in texts uses the time zone of the machine running the Worker, so run it in the salon's time zone (or keep `SALON_TIME_ZONE` at its default).
+
 ### Demoing outside opening hours
 
 Outside opening hours (evenings, Sundays and Mondays by default), a new slot just shows "Waiting until Tue 9:00 AM to start texting". To demo the full flow at any time, turn on the override.
@@ -100,39 +133,6 @@ IGNORE_QUIET_HOURS=true npm run dev
 ```
 
 Slots still have to be in opening hours; only the texting restriction is lifted. Start the app again without the variable to switch it off.
-
-### Reply window: 30 seconds in the demo, 15 minutes by default
-
-Each client has a set time to reply before the offer moves on. The Workflow's default is **15 minutes**, the real-world setting. `npm run dev` passes **30 seconds** instead, so you can watch offers time out without waiting. Change it with `RESPONSE_TIMEOUT_SECONDS`.
-
-## Texting hours
-
-Lena's rule: **client texts only go out Tuesday–Saturday, 9 AM–7 PM, salon time.** Front desk messages aren't restricted.
-
-- **Offers wait for opening time.** Before each offer, the Workflow checks the time. Outside hours it waits on a durable Temporal timer until the next opening time, then texts. The wait survives Worker restarts, and the front desk can still cancel the opening meanwhile. The openings card and the slot's page show "Waiting until Tue 9:00 AM to start texting" (or "to resume texting", if it ran out of time mid-list).
-- **An offer must fit before closing.** An offer only goes out if its whole reply window ends by 7 PM. With a 15-minute window, the last offer of the day goes out at 6:45 PM. So confirmations, which follow a YES within the window, never go out after 7 either.
-- **Too late means the front desk.** If texting couldn't resume until after the slot starts (say, a Saturday 6:55 PM slot cancelled at 6:50 PM), the slot goes straight to the front desk with that reason instead of waiting.
-- **Sorry texts are skipped after hours.** A late or out-of-turn reply outside opening hours is still turned away, but the client isn't texted.
-- **Slots must be in opening hours.** The cancellation form only allows them, and the API rejects others.
-
-The hours are a setting (`SALON_HOURS`, below). Each slot keeps the hours it was opened with.
-
-## Settings
-
-All optional, set as environment variables.
-
-| Variable | Default | What it does |
-| --- | --- | --- |
-| `RESPONSE_TIMEOUT_SECONDS` | `30` | Reply window for each offer, in seconds. Read when the app starts; applies to slots opened after that. |
-| `WAITLIST_CSV` | `data/waitlist.csv` | Path to the waitlist file. |
-| `PORT` | `3000` | Port for the web app and API. |
-| `OUTBOX_PORT` | `3001` | Port where the Worker serves the simulated text outbox to the API (local only). |
-| `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal server address. |
-| `SALON_HOURS` | `Tue-Sat 09:00-19:00` | Opening hours: when slots can be and when clients can be texted. Same format as the waitlist's availability column, one window only. |
-| `SALON_TIME_ZONE` | This machine's time zone | The salon's [IANA time zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. `America/Los_Angeles`. Used for opening hours and the end of a slot's day. |
-| `IGNORE_QUIET_HOURS` | off | Set to `true` to text clients at any time, for demos ([above](#demoing-outside-opening-hours)). |
-
-"Today" in texts uses the time zone of the machine running the Worker, so run it in the salon's time zone (or keep `SALON_TIME_ZONE` at its default).
 
 ## Waitlist CSV format
 
