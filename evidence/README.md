@@ -20,6 +20,7 @@ Texts and Square bookings are simulated, as the page says.
 | [`05-crash-test-temporal-history.png`](05-crash-test-temporal-history.png) | Maya · Cut & style, Mon Oct 12, 1:00 PM | **Crash test, Temporal UI timeline.** Priya's 1-minute reply timer runs. The marked gap on the axis is while the Worker was down. After it, `sendOffer` to Daniel and his own timer show the Workflow carried on. |
 | [`05b-crash-test-event-history.png`](05b-crash-test-event-history.png) | Same slot | **Crash test, full event history** in the Temporal UI, oldest first (walkthrough below). |
 | [`06-crash-test-slot-detail.png`](06-crash-test-slot-detail.png) | Same slot | **Crash test, as the salon sees it.** Priya shows *No reply* and Daniel *Has the offer*. Priya's offer text is missing from "Simulated texts" because the demo outbox lives in Worker memory and was wiped when the Worker was killed. The Workflow's own state was safe in Temporal. |
+| [`07-completed-workflow-event-history.png`](07-completed-workflow-event-history.png) | Jordan · Blowout, Fri Oct 9, 9:00 AM (the slot from 03) | **A completed Workflow** in the Temporal UI: the **COMPLETED** status, start and end times, input and result, and all 49 events from start to finish (walkthrough below). |
 
 ## The crash test, step by step
 
@@ -41,3 +42,25 @@ Texts and Square bookings are simulated, as the page says.
 | 30 | 7:09:54 PM | Daniel's timer starts. |
 
 Events 31–32 came after the script had finished and stopped the Worker: Daniel's timer fired and is waiting for a Worker. That's why the Workflow still shows as Running.
+
+## Reading the completed Workflow (07)
+
+This is the "Filled" slot from 03, run through to the end.
+
+| Event | Time | What happened |
+| --- | --- | --- |
+| 1 | 7:07:10 PM | The Workflow starts for the slot (input on the left). |
+| 5–7 | 7:07:11 PM | `findMatchingClients` finds one match: Sam Okafor. |
+| 11–13 | 7:07:11 PM | `sendOffer` texts Sam. |
+| 17 | 7:07:11 PM | His 1-minute reply timer starts. |
+| 21–22 | 7:07:12 PM | Sam's YES arrives as the `replyToOffer` Update and is accepted ("Thanks! We're confirming your booking now."). |
+| 23 | 7:07:12 PM | The reply timer is cancelled, since he answered in time. |
+| 24–26 | 7:07:12 PM | `bookAppointment` books him (booking `2026-10-09-jordan-0900-w6`). |
+| 30–32 | 7:07:12 PM | `sendConfirmation` texts Sam his confirmation. |
+| 36–38 | 7:07:12 PM | `notifyFrontDeskFilled` tells the front desk. |
+| 42 | 7:07:12 PM | The end-of-day timer starts. The slot would close itself at midnight after its day (about 3 days 5 hours away) if nobody dismissed the notice. |
+| 46–47 | 7:31:49 PM | The front desk dismisses the "Filled" notice (the `dismissFilledNotice` Update). |
+| 48 | 7:31:49 PM | The end-of-day timer is cancelled. |
+| 49 | 7:31:49 PM | **Workflow Execution Completed.** The final status is on the right. |
+
+The dismissal was done about 25 minutes later, on a later Worker process (`8260@Ak-Laptop`), when this screenshot was added.
