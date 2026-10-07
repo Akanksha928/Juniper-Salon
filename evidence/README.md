@@ -15,12 +15,12 @@ Texts and Square bookings are simulated, as the page says.
 | --- | --- | --- |
 | [`01-openings-active-offer.png`](01-openings-active-offer.png) | Maya · Cut & style, Fri Oct 9, 4:00 PM | **Main page** with an active opening: "Offered to Grace Liu · 0:54 left" and the summary line "1 declined · 1 no reply · 0 left". Also visible: a slot that needs the front desk, and the green "Filled" notice. |
 | [`02-slot-detail-mid-run.png`](02-slot-detail-mid-run.png) | Same slot | **Slot detail mid-run.** Priya *Declined*, Daniel *No reply* (his 60 seconds ran out), Grace *Has the offer* with a countdown. Alongside: the timeline of each step and the simulated texts sent to all three. |
-| [`03-filled-notice.png`](03-filled-notice.png) | Jordan · Blowout, Fri Oct 9, 9:00 AM | **Main page with a "Filled" notice:** "Sam Okafor took Jordan's 9:00 AM Blowout", with a Dismiss button. It stays on every browser until the front desk dismisses it. |
+| [`03-filled-notice.png`](03-filled-notice.png) | Jordan · Blowout, Fri Oct 9, 9:15 AM | **Main page with a "Filled" notice** and nothing else open: "Sam Okafor took Jordan's 9:15 AM Blowout", with a Dismiss button, above "No openings right now". The notice stays on every browser until the front desk dismisses it. Taken after the other test slots were closed, so the notice stands on its own. |
 | [`04-needs-front-desk.png`](04-needs-front-desk.png) | Lena · Color refresh, Thu Oct 8, 10:00 AM | **A slot that needs the front desk.** Rosa, the only match, declined. The page shows the amber "Front desk: this slot needs you" banner, the Unfilled status, the **Mark handled** button, and the front desk's text alert. |
 | [`05-crash-test-temporal-history.png`](05-crash-test-temporal-history.png) | Maya · Cut & style, Mon Oct 12, 1:00 PM | **Crash test, Temporal UI timeline.** Priya's 1-minute reply timer runs. The marked gap on the axis is while the Worker was down. After it, `sendOffer` to Daniel and his own timer show the Workflow carried on. |
 | [`05b-crash-test-event-history.png`](05b-crash-test-event-history.png) | Same slot | **Crash test, full event history** in the Temporal UI, oldest first (walkthrough below). |
 | [`06-crash-test-slot-detail.png`](06-crash-test-slot-detail.png) | Same slot | **Crash test, as the salon sees it.** Priya shows *No reply* and Daniel *Has the offer*. Priya's offer text is missing from "Simulated texts" because the demo outbox lives in Worker memory and was wiped when the Worker was killed. The Workflow's own state was safe in Temporal. |
-| [`07-completed-workflow-event-history.png`](07-completed-workflow-event-history.png) | Jordan · Blowout, Fri Oct 9, 9:00 AM (the slot from 03) | **A completed Workflow** in the Temporal UI: the **COMPLETED** status, start and end times, input and result, and all 49 events from start to finish (walkthrough below). |
+| [`07-completed-workflow-event-history.png`](07-completed-workflow-event-history.png) | Jordan · Blowout, Fri Oct 9, 9:00 AM (the Filled notice in 01) | **A completed Workflow** in the Temporal UI: the **COMPLETED** status, start and end times, input and result, and all 49 events from start to finish (walkthrough below). |
 
 ## The crash test, step by step
 
@@ -45,7 +45,7 @@ Events 31–32 came after the script had finished and stopped the Worker: Daniel
 
 ## Reading the completed Workflow (07)
 
-This is the "Filled" slot from 03, run through to the end.
+This is the slot behind the "Filled" notice in 01, run through to the end.
 
 | Event | Time | What happened |
 | --- | --- | --- |
